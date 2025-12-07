@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+echo ":: Installing base packages..."
+
+sudo pacman -Syu --noconfirm
+
+sudo pacman -S --needed --noconfirm \
+    base-devel \
+    git \
+    curl \
+    wget \
+    nano \
+    neovim \
+    unzip \
+    zip
+
