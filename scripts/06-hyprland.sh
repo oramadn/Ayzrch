@@ -7,7 +7,7 @@ echo ":: Installing Hyprland and essential Wayland packages..."
 sudo pacman -S --needed --noconfirm \
     hyprland \
     wayland-protocols \
-    wlroots \
+    wlroots0.19 \
     mako \
     wofi \
     swaybg \

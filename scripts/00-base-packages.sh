@@ -13,5 +13,7 @@ sudo pacman -S --needed --noconfirm \
     nano \
     neovim \
     unzip \
-    zip
+    zip \
+    openssh \
+    chezmoi
 
