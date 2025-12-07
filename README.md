@@ -1,0 +1,1 @@
+- Need to reboot after downloading NVIDIA drivers

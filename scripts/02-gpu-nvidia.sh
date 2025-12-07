@@ -8,6 +8,13 @@ echo ":: Detecting NVIDIA GPU..."
 if lspci | grep -i 'nvidia' >/dev/null; then
     echo ":: NVIDIA GPU detected"
 
+    # Enable multilib for 32-bit libraries
+    if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+        echo ":: Enabling multilib repository..."
+        sudo sed -i '/#\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
+        sudo pacman -Sy
+    fi
+
     # Determine driver
     if lspci | grep -i 'nvidia' | grep -q -E "RTX [2-9][0-9]|GTX 16"; then
         NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
@@ -53,6 +60,7 @@ if lspci | grep -i 'nvidia' >/dev/null; then
     sudo mkinitcpio -P
 
     echo ":: NVIDIA driver installation complete!"
+    echo ":: NVIDIA installed. Please reboot before continuing to Hyprland installation."
 else
     echo ":: No NVIDIA GPU detected. Skipping NVIDIA driver installation."
 fi
