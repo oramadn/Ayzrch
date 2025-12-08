@@ -32,6 +32,26 @@ if [ ! -L "$HOME/.zshrc" ]; then
     ln -s "$ZSHRC" "$HOME/.zshrc"
 fi
 
+# Starship
+sudo pacman -S --needed --noconfirm starship
+
+# Ensure Starship is initialized in zshrc
+if ! grep -q 'starship init zsh' "$ZSHRC"; then
+    echo 'eval "$(starship init zsh)"' >> "$ZSHRC"
+fi
+
+# Create default starship config if missing
+STARSHIP_CFG="$HOME/.config/starship.toml"
+if [ ! -f "$STARSHIP_CFG" ]; then
+    cat > "$STARSHIP_CFG" <<'EOF'
+add_newline = false
+
+[character]
+success_symbol = "❯"
+error_symbol = "❯"
+EOF
+fi
+
 # ------------------------------------------------------------------------------
 # 3. Install Zsh plugin managers
 # ------------------------------------------------------------------------------

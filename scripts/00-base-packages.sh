@@ -8,6 +8,7 @@ sudo pacman -Syu --noconfirm
 sudo pacman -S --needed --noconfirm \
     base-devel \
     git \
+    less \
     curl \
     wget \
     nano \
