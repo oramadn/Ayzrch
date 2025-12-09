@@ -16,5 +16,11 @@ sudo pacman -S --needed --noconfirm \
     unzip \
     zip \
     openssh \
-    chezmoi
+    chezmoi \
+    rofi \
+    waybar-hyprland \
+    wtype \
+    wl-clipboard \
+    rofi-emoji \
+    feh
 
