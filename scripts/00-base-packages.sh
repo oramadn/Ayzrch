@@ -22,5 +22,6 @@ sudo pacman -S --needed --noconfirm \
     wtype \
     wl-clipboard \
     rofi-emoji \
-    feh
+    feh \
+    ufw
 
