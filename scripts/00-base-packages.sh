@@ -23,5 +23,7 @@ sudo pacman -S --needed --noconfirm \
     wl-clipboard \
     rofi-emoji \
     feh \
-    ufw
+    ufw \
+    eza \
+    libnotify
 
