@@ -26,5 +26,6 @@ sudo pacman -S --needed --noconfirm \
     ufw \
     eza \
     libnotify \
-    tmux
+    tmux \
+    yazi
 
