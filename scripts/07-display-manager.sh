@@ -17,15 +17,15 @@ if [ ! -f "${LY_CONF}.backup" ]; then
     sudo cp "$LY_CONF" "${LY_CONF}.backup"
 fi
 
-# Enable autologin
-sudo sed -i "s/^autologin = .*/autologin = $USER_NAME/" "$LY_CONF"
+# Enable autologin (handles both commented and uncommented lines)
+sudo sed -i "s/^[# ]*autologin = .*/autologin = $USER_NAME/" "$LY_CONF"
 
 # Set Hyprland as default session
-sudo sed -i "s|^default = .*|default = Hyprland|" "$LY_CONF"
+sudo sed -i "s|^[# ]*default = .*|default = Hyprland|" "$LY_CONF"
 
 # Enable Ly service
 echo ":: Enabling Ly service..."
-sudo systemctl enable ly.service
+sudo systemctl enable ly@tty2.service
 
 echo ":: Ly display manager installed and configured!"
 echo ":: Upon reboot, your system will auto-login and start Hyprland."

@@ -7,7 +7,6 @@ echo ":: Installing Waybar..."
 # 1. Install Waybar and dependencies
 # ------------------------------------------------------------------------------
 sudo pacman -S --needed --noconfirm \
-    waybar \
     wl-clipboard \
     imagemagick \
     polkit \
@@ -32,7 +31,7 @@ if [ ! -f "$WAYBAR_CONFIG" ]; then
 {
     "layer": "top",
     "position": "top",
-    "modules-left": ["sway/workspaces"],
+    "modules-left": ["hyprland/workspaces"],
     "modules-center": ["clock"],
     "modules-right": ["network", "pulseaudio", "battery"]
 }

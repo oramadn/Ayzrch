@@ -18,12 +18,13 @@ sudo pacman -S --needed --noconfirm \
     openssh \
     chezmoi \
     rofi \
-    waybar-hyprland \
+    waybar \
     wtype \
     wl-clipboard \
     rofi-emoji \
     feh \
     ufw \
     eza \
-    libnotify
+    libnotify \
+    tmux
 
