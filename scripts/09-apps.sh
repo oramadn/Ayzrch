@@ -59,3 +59,9 @@ npm install -g npm@latest
 
 echo ":: Node $(node -v) / npm $(npm -v) ready."
 
+# ------------------------------------------------------------------------------
+# 5. Install screenshot / clipping tools
+# ------------------------------------------------------------------------------
+echo ":: Installing screenshot and clipping tools..."
+sudo pacman -S --noconfirm grim slurp satty wl-clipboard
+
