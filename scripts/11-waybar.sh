@@ -31,6 +31,14 @@ if ! command -v wayle &>/dev/null; then
     paru -S --noconfirm wayle-bin
 fi
 
+# ------------------------------------------------------------------------------
+# 4. Disable mako if present — wayle owns org.freedesktop.Notifications
+# ------------------------------------------------------------------------------
+if systemctl --user is-enabled mako.service &>/dev/null; then
+    echo ":: Disabling mako (replaced by wayle notification service)..."
+    systemctl --user disable --now mako.service || true
+fi
+
 echo ":: Wayle setup complete!"
 echo ":: Run 'matugen image <wallpaper>' to generate the wayle config."
 echo ":: Wayle starts automatically via Hyprland startup.conf."

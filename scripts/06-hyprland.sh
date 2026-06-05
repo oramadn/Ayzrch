@@ -8,7 +8,6 @@ sudo pacman -S --needed --noconfirm \
     hyprland \
     wayland-protocols \
     wlroots0.19 \
-    mako \
     wofi \
     grim \
     slurp \
