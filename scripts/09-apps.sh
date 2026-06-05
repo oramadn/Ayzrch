@@ -8,6 +8,7 @@ AUR_PACKAGES=(
     zen-browser-bin
     awww
     tmuxinator
+    wayle-bin
 )
 
 # ------------------------------------------------------------------------------

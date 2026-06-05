@@ -10,7 +10,6 @@ sudo pacman -S --needed --noconfirm \
     wlroots0.19 \
     mako \
     wofi \
-    swaybg \
     grim \
     slurp \
     foot \

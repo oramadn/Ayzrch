@@ -1,54 +1,36 @@
 #!/bin/bash
 set -e
 
-echo ":: Installing Waybar..."
+echo ":: Setting up wayle bar and dependencies..."
 
 # ------------------------------------------------------------------------------
-# 1. Install Waybar and dependencies
+# 1. Install dependencies
 # ------------------------------------------------------------------------------
 sudo pacman -S --needed --noconfirm \
-    wl-clipboard \
-    imagemagick \
-    polkit \
-    pamixer \
     networkmanager \
-    jq
+    pamixer \
+    upower \
+    polkit \
+    wl-clipboard
 
 # ------------------------------------------------------------------------------
-# 2. Create user config directory
+# 2. Enable and start NetworkManager with iwd as WiFi backend
 # ------------------------------------------------------------------------------
-WAYBAR_CONFIG_DIR="$HOME/.config/waybar"
-mkdir -p "$WAYBAR_CONFIG_DIR"
-
-# ------------------------------------------------------------------------------
-# 3. Create a minimal default config if missing
-# ------------------------------------------------------------------------------
-WAYBAR_CONFIG="$WAYBAR_CONFIG_DIR/config"
-WAYBAR_STYLE="$WAYBAR_CONFIG_DIR/style.css"
-
-if [ ! -f "$WAYBAR_CONFIG" ]; then
-    cat > "$WAYBAR_CONFIG" <<'EOF'
-{
-    "layer": "top",
-    "position": "top",
-    "modules-left": ["hyprland/workspaces"],
-    "modules-center": ["clock"],
-    "modules-right": ["network", "pulseaudio", "battery"]
-}
+sudo mkdir -p /etc/NetworkManager/conf.d
+sudo tee /etc/NetworkManager/conf.d/wifi-backend.conf > /dev/null <<'EOF'
+[device]
+wifi.backend=iwd
 EOF
+
+sudo systemctl enable --now NetworkManager
+
+# ------------------------------------------------------------------------------
+# 3. Install wayle (AUR)
+# ------------------------------------------------------------------------------
+if ! command -v wayle &>/dev/null; then
+    paru -S --noconfirm wayle-bin
 fi
 
-if [ ! -f "$WAYBAR_STYLE" ]; then
-    cat > "$WAYBAR_STYLE" <<'EOF'
-* {
-    font-family: "DejaVu Sans Mono";
-    font-size: 10px;
-    background-color: #222222;
-    color: #ffffff;
-}
-EOF
-fi
-
-echo ":: Waybar installation complete!"
-echo ":: Configure modules and styling further by editing $WAYBAR_CONFIG_DIR/config and style.css"
-
+echo ":: Wayle setup complete!"
+echo ":: Run 'matugen image <wallpaper>' to generate the wayle config."
+echo ":: Wayle starts automatically via Hyprland startup.conf."

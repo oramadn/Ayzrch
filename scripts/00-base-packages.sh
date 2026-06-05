@@ -18,7 +18,6 @@ sudo pacman -S --needed --noconfirm \
     openssh \
     chezmoi \
     rofi \
-    waybar \
     wtype \
     wl-clipboard \
     rofi-emoji \
