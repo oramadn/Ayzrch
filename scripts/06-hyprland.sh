@@ -12,7 +12,9 @@ sudo pacman -S --needed --noconfirm \
     grim \
     slurp \
     foot \
-    ghostty
+    ghostty \
+    hyprlock \
+    hypridle
 
 # Optional: configure NVIDIA environment variables only if GPU is present
 if lspci | grep -i 'nvidia' >/dev/null; then
