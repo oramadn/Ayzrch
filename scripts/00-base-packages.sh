@@ -26,5 +26,6 @@ sudo pacman -S --needed --noconfirm \
     eza \
     libnotify \
     tmux \
-    yazi
+    yazi \
+    ripgrep
 

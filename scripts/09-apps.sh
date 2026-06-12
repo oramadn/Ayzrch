@@ -9,6 +9,7 @@ AUR_PACKAGES=(
     awww
     tmuxinator
     wayle-bin
+    localsend-bin
 )
 
 # ------------------------------------------------------------------------------
@@ -16,10 +17,10 @@ AUR_PACKAGES=(
 # ------------------------------------------------------------------------------
 if command -v paru >/dev/null 2>&1; then
     AUR_HELPER="paru"
-    AUR_FLAGS=(--needed --noconfirm --noclean --nodiffmenu --nopgpfetch --skipreview)
+    AUR_FLAGS=(--needed --noconfirm --noclean --nopgpfetch --skipreview)
 elif command -v yay >/dev/null 2>&1; then
     AUR_HELPER="yay"
-    AUR_FLAGS=(--needed --noconfirm --cleanafter --nocleanmenu --nodiffmenu --noeditmenu)
+    AUR_FLAGS=(--needed --noconfirm --cleanafter )
 else
     AUR_HELPER=""
 fi
