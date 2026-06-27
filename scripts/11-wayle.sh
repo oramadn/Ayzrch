@@ -39,6 +39,12 @@ if systemctl --user is-enabled mako.service &>/dev/null; then
     systemctl --user disable --now mako.service || true
 fi
 
+
+# ------------------------------------------------------------------------------
+# 5. Installing icons
+# ------------------------------------------------------------------------------
+wayle icons install tabler-filled diamond
+
 echo ":: Wayle setup complete!"
 echo ":: Run 'matugen image <wallpaper>' to generate the wayle config."
 echo ":: Wayle starts automatically via Hyprland startup.conf."
