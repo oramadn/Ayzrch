@@ -10,6 +10,8 @@ AUR_PACKAGES=(
     tmuxinator
     wayle-bin
     localsend-bin
+    todoist-appimage
+    pomatez
 )
 
 # ------------------------------------------------------------------------------
@@ -66,4 +68,51 @@ echo ":: Node $(node -v) / npm $(npm -v) ready."
 # ------------------------------------------------------------------------------
 echo ":: Installing screenshot and clipping tools..."
 sudo pacman -S --noconfirm grim slurp satty wl-clipboard
+
+# ------------------------------------------------------------------------------
+# 6. Wayland desktop entry overrides for Electron apps
+#    These apps default to X11; force Wayland so they work without XWayland.
+# ------------------------------------------------------------------------------
+APPS_DIR="$HOME/.local/share/applications"
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$APPS_DIR" "$LOCAL_BIN"
+
+echo ":: Writing Wayland desktop entry override for Todoist..."
+cat >"$APPS_DIR/todoist.desktop" <<'EOF'
+[Desktop Entry]
+Name=Todoist
+Exec=env DESKTOPINTEGRATION=false /usr/bin/todoist %u --ozone-platform=wayland %U
+Terminal=false
+Type=Application
+Icon=todoist
+StartupWMClass=Todoist
+Comment=The Best To-Do List App and Task Manager
+MimeType=x-scheme-handler/todoist;x-scheme-handler/com.todoist;image/png;image/jpeg;image/webp;application/pdf;
+Categories=Office;
+
+[Desktop Action new-window]
+Name=New Home Window
+Exec=todoist --new-window
+EOF
+
+echo ":: Writing Wayland wrapper and desktop entry override for Pomatez..."
+cat >"$LOCAL_BIN/pomatez" <<'EOF'
+#!/bin/sh
+exec /opt/Pomatez/pomatez --ozone-platform=wayland "$@"
+EOF
+chmod +x "$LOCAL_BIN/pomatez"
+
+cat >"$APPS_DIR/pomatez.desktop" <<'EOF'
+[Desktop Entry]
+Name=Pomatez
+Exec=/opt/Pomatez/pomatez --ozone-platform=wayland %U
+Terminal=false
+Type=Application
+Icon=pomatez
+StartupWMClass=Pomatez
+Comment=Attractive pomodoro timer for Windows, Mac, and Linux.
+Categories=Utility;
+EOF
+
+update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
