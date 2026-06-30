@@ -8,6 +8,7 @@ echo ":: Setting up wayle bar and dependencies..."
 # ------------------------------------------------------------------------------
 sudo pacman -S --needed --noconfirm \
     networkmanager \
+    iwd \
     pamixer \
     upower \
     polkit \
@@ -22,6 +23,7 @@ sudo tee /etc/NetworkManager/conf.d/wifi-backend.conf > /dev/null <<'EOF'
 wifi.backend=iwd
 EOF
 
+sudo systemctl enable --now iwd
 sudo systemctl enable --now NetworkManager
 
 # ------------------------------------------------------------------------------

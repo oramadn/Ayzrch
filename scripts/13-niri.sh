@@ -22,4 +22,9 @@ EOF
     fi
 fi
 
+# Set system-wide dark theme via gsettings (dconf)
+echo ":: Applying dark theme..."
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark'
+
 echo ":: niri installation complete!"
