@@ -27,5 +27,6 @@ sudo pacman -S --needed --noconfirm \
     libnotify \
     tmux \
     yazi \
-    ripgrep
-
+    ripgrep \
+    wl-clip-persist \
+    plasma-integration
