@@ -7,11 +7,8 @@ echo ":: Installing Hyprland and essential Wayland packages..."
 sudo pacman -S --needed --noconfirm \
     hyprland \
     wayland-protocols \
-    wlroots0.19 \
-    wofi \
     grim \
     slurp \
-    foot \
     ghostty \
     hyprlock \
     hypridle

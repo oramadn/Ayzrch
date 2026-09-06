@@ -44,8 +44,6 @@ sudo pacman -S --needed --noconfirm \
     xdg-desktop-portal-hyprland \
     nwg-displays \
     qt6ct \
-    kitty \
-    wezterm \
     jq \
     socat \
     zenity \
@@ -61,7 +59,6 @@ sudo pacman -S --needed --noconfirm \
     hyprpicker \
     playerctl \
     brightnessctl \
-    rofi \
     dolphin \
     wayland \
     libpng \

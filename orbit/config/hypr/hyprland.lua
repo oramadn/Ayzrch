@@ -443,7 +443,7 @@ hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("zen-browser -P Personal"))          
 hl.bind(mainMod .. " + SHIFT + B", hl.dsp.exec_cmd("zen-browser -P Work"))      -- Work profile.
 
 -- Utilities.
-hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("rofi -modi emoji -show emoji")) -- Emoji picker.
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("noctalia msg panel-toggle launcher /emo")) -- Emoji picker.
 hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("hyprpicker -a"))                -- Colour picker to clipboard.
 
 -- Audio, media and brightness keys. `repeating` holds to repeat; `locked` keeps

@@ -17,11 +17,8 @@ sudo pacman -S --needed --noconfirm \
     zip \
     openssh \
     chezmoi \
-    rofi \
     wtype \
     wl-clipboard \
-    rofi-emoji \
-    feh \
     ufw \
     eza \
     libnotify \
