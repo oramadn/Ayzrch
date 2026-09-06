@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""Neutral per-output global-menu state for the Noctalia frontend."""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+
+BIN = os.path.join(os.environ.get("HOME", ""), ".local", "bin")
+AT_SPI = os.path.join(BIN, "orbit-appmenu-atspi")
+DBUS_MENU = os.path.join(BIN, "orbit-appmenu")
+STATE_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "noctalia-global-menu-state.json"
+)
+
+
+def run_json(*command):
+    try:
+        result = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=30
+        )
+        return json.loads(result.stdout), result.returncode == 0
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return [], False
+
+
+def load_state():
+    try:
+        with open(STATE_PATH, encoding="utf-8") as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(value):
+    directory = os.path.dirname(STATE_PATH)
+    os.makedirs(directory, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="noctalia-global-menu-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, separators=(",", ":"))
+        os.replace(path, STATE_PATH)
+    except OSError:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def label(value):
+    return str(value or "").replace("_", "")
+
+
+def normalize_atspi(node):
+    return {
+        "id": str(node.get("id", "")),
+        "label": label(node.get("label")),
+        "type": node.get("type", "standard"),
+        "enabled": node.get("enabled", True) is not False,
+        "visible": node.get("visible", True) is not False,
+        "children": [normalize_atspi(child) for child in node.get("children", [])],
+        "action": {
+            "source": "atspi",
+            "service": node.get("service", ""),
+            "path": node.get("path", ""),
+        },
+    }
+
+
+def normalize_dbus(node, window_id, service="", path="", source="dbusmenu"):
+    properties = node.get("properties", {}) or {}
+    children = [normalize_dbus(child, window_id, service, path, source) for child in node.get("children", [])]
+    item_type = properties.get("type", "standard")
+    if (children or properties.get("children-display") == "submenu") and item_type == "standard":
+        item_type = "submenu"
+    toggle_state = properties.get("toggle-state")
+    return {
+        "id": str(node.get("id", "")),
+        "label": label(properties.get("label", node.get("label", ""))),
+        "type": item_type,
+        "enabled": properties.get("enabled", True) is not False,
+        "visible": properties.get("visible", True) is not False,
+        "checked": toggle_state in (1, True, "1", "true"),
+        "shortcut": properties.get("shortcut", ""),
+        "children": children,
+        "hasChildren": properties.get("children-display") == "submenu" or bool(children),
+        "action": {
+            "source": source,
+            "windowId": int(window_id),
+            "id": int(node.get("id", 0)),
+            "service": service,
+            "path": path,
+        },
+    }
+
+
+def client_identity(client):
+    return str(client.get("address") or client.get("pid") or "")
+
+
+def candidate_record(client, output, workspace):
+    return {
+        "address": str(client.get("address", "")),
+        "pid": int(client.get("pid") or 0),
+        "title": str(client.get("title") or ""),
+        "class": str(client.get("class") or ""),
+        "initialClass": str(client.get("initialClass") or ""),
+        "monitor": output,
+        "workspace": workspace,
+    }
+
+
+def candidates_for(clients, monitor_id, workspace):
+    candidates = [
+        client
+        for client in clients
+        if int(client.get("monitor", -1)) == monitor_id
+        and int((client.get("workspace") or {}).get("id", -1)) == workspace
+    ]
+    candidates.sort(key=lambda client: int(client.get("focusHistoryID", 999999)))
+    return candidates
+
+
+def select_candidate(clients, monitor, workspace, focused_output, last_focused):
+    candidates = candidates_for(clients, int(monitor.get("id", -1)), workspace)
+    if focused_output == monitor.get("name"):
+        return candidates[0] if candidates else None
+    remembered = last_focused.get(f"{monitor.get('name')}:{workspace}")
+    for candidate in candidates:
+        if remembered and client_identity(candidate) == remembered:
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def match_atspi(entries, candidate, output):
+    for entry in entries:
+        if (
+            int(entry.get("pid") or 0) == int(candidate.get("pid") or 0)
+            and entry.get("title", "") == candidate.get("title", "")
+            and (
+                entry.get("monitor", "") == output
+                or (
+                    not entry.get("monitor", "")
+                    and entry.get("address", "") == candidate.get("address", "")
+                )
+            )
+        ):
+            return entry
+    return None
+
+
+def match_dbus(entries, candidate):
+    pid = int(candidate.get("pid") or 0)
+    title = candidate.get("title", "")
+    exact = [entry for entry in entries if int(entry.get("pid") or 0) == pid and entry.get("title", "") == title]
+    if exact:
+        return exact[0]
+    for entry in entries:
+        if int(entry.get("pid") or 0) == pid and entry.get("wmClass") in {
+            candidate.get("class", ""), candidate.get("initialClass", "")
+        }:
+            return entry
+    return None
+
+
+def menu_for(candidate, output, atspi, dbus_menu):
+    entry = match_atspi(atspi, candidate, output)
+    if entry:
+        root = (entry.get("layout") or {}).get("root") or {}
+        return "atspi", [normalize_atspi(child) for child in root.get("children", [])]
+    entry = match_dbus(dbus_menu, candidate)
+    if entry:
+        root = (entry.get("layout") or {}).get("root") or {}
+        source = "direct-dbusmenu" if entry.get("source") == "dbusmenu-direct" else "dbusmenu"
+        return source, [normalize_dbus(
+            child, entry.get("windowId", 0), entry.get("service", ""), entry.get("path", ""), source
+        ) for child in root.get("children", [])]
+    return "", []
+
+
+def snapshot(focus_address=""):
+    clients, clients_ok = run_json("hyprctl", "clients", "-j")
+    monitors, monitors_ok = run_json("hyprctl", "monitors", "-j")
+    clients = [client for client in clients if client.get("mapped") and not client.get("hidden")]
+    monitors = [monitor for monitor in monitors if not monitor.get("disabled")]
+    state = load_state()
+    previous_outputs = state.get("outputs", {})
+    atspi_command = [AT_SPI, "snapshot"]
+    dbus_command = [DBUS_MENU, "snapshot"]
+    if focus_address:
+        atspi_command.append(focus_address)
+        dbus_command.append(focus_address)
+    atspi, atspi_ok = run_json(*atspi_command)
+    dbus_menu, dbus_ok = run_json(*dbus_command)
+    atspi = atspi if isinstance(atspi, list) else []
+    dbus_menu = dbus_menu if isinstance(dbus_menu, list) else []
+
+    last_focused = state.get("lastFocused", {})
+    focused_output = next((monitor.get("name", "") for monitor in monitors if monitor.get("focused")), "")
+
+    live_locations = {}
+    for client in clients:
+        output = next(
+            (monitor.get("name", "") for monitor in monitors
+             if int(monitor.get("id", -1)) == int(client.get("monitor", -1))),
+            "",
+        )
+        workspace = int((client.get("workspace") or {}).get("id", -1))
+        live_locations[client_identity(client)] = f"{output}:{workspace}"
+    last_focused = {
+        key: address for key, address in last_focused.items()
+        if live_locations.get(address) == key
+    }
+    for client in clients:
+        if client.get("focused") or int(client.get("focusHistoryID", 999999)) == 0:
+            workspace = int((client.get("workspace") or {}).get("id", -1))
+            output = next(
+                (monitor.get("name", "") for monitor in monitors if int(monitor.get("id", -1)) == int(client.get("monitor", -1))),
+                "",
+            )
+            last_focused[f"{output}:{workspace}"] = client_identity(client)
+
+    outputs = dict(previous_outputs) if focus_address else {}
+    backends_ok = atspi_ok or dbus_ok
+    focus_client = next((client for client in clients if client_identity(client) == focus_address), None)
+    focus_output = next(
+        (
+            monitor.get("name", "")
+            for monitor in monitors
+            for client in clients
+            if client_identity(client) == focus_address
+            and int(monitor.get("id", -1)) == int(client.get("monitor", -1))
+        ),
+        "",
+    )
+    for monitor in monitors:
+        output = monitor.get("name", "")
+        if focus_address and output != focus_output:
+            continue
+        workspace = int((monitor.get("activeWorkspace") or {}).get("id", -1))
+        if focus_address and focus_client is not None:
+            workspace = int((focus_client.get("workspace") or {}).get("id", workspace))
+        candidate = select_candidate(clients, monitor, workspace, focused_output, last_focused)
+        if candidate is None:
+            outputs[output] = {"workspace": workspace, "candidate": None, "available": False, "menus": []}
+            continue
+        record = candidate_record(candidate, output, workspace)
+        previous = previous_outputs.get(output, {})
+        same_candidate = (previous.get("candidate") or {}).get("address") == record["address"]
+        if not backends_ok and same_candidate:
+            outputs[output] = previous
+            continue
+        source, menus = menu_for(candidate, output, atspi, dbus_menu)
+        outputs[output] = {
+            "workspace": workspace,
+            "candidate": record,
+            "available": bool(source and menus),
+            "source": source,
+            "menus": menus,
+        }
+
+    next_state = {"lastFocused": last_focused, "outputs": outputs}
+    save_state(next_state)
+    print(json.dumps({"outputs": outputs}, separators=(",", ":")))
+
+
+def activate(output, payload):
+    state = load_state()
+    entry = state.get("outputs", {}).get(output, {})
+    candidate = entry.get("candidate") or {}
+    action = json.loads(payload)
+    if (
+        not entry.get("available")
+        or action.get("source") not in {"atspi", "dbusmenu", "direct-dbusmenu"}
+        or action.get("source") != entry.get("source")
+    ):
+        return 1
+    if action.get("source") == "atspi":
+        command = [AT_SPI, "activate", str(action.get("service", "")), str(action.get("path", ""))]
+    elif action.get("source") == "direct-dbusmenu":
+        if not action.get("service") or not action.get("path"):
+            return 1
+        command = [DBUS_MENU, "activate-direct", str(action["service"]), str(action["path"]), str(action.get("id", 0))]
+    else:
+        if action.get("service") and action.get("path"):
+            command = [DBUS_MENU, "activate-direct", str(action["service"]), str(action["path"]), str(action.get("id", 0))]
+        else:
+            command = [DBUS_MENU, "activate", str(action.get("windowId", 0)), str(action.get("id", 0))]
+    if not candidate:
+        return 1
+    return subprocess.run(command, check=False).returncode
+
+
+def update_expanded(items, action, children):
+    for item in items:
+        item_action = item.get("action") or {}
+        if (
+            item_action.get("source") in {"dbusmenu", "direct-dbusmenu"}
+            and item_action.get("service") == action.get("service")
+            and item_action.get("path") == action.get("path")
+            and int(item_action.get("id", -1)) == int(action.get("id", -2))
+        ):
+            item["children"] = [normalize_dbus(
+                child, 0, action["service"], action["path"], action.get("source", "dbusmenu")
+            ) for child in children]
+            item["hasChildren"] = True
+            item["type"] = "submenu"
+            return True
+        if update_expanded(item.get("children") or [], action, children):
+            return True
+    return False
+
+
+def expand(output, payload):
+    state = load_state()
+    entry = state.get("outputs", {}).get(output, {})
+    action = json.loads(payload)
+    if (
+        not entry.get("available")
+        or entry.get("source") != "direct-dbusmenu"
+        or action.get("source") != "direct-dbusmenu"
+        or not action.get("service") or not action.get("path")
+    ):
+        return 1
+    result = subprocess.run(
+        [DBUS_MENU, "expand-direct", str(action["service"]), str(action["path"]), str(action["id"])],
+        check=False, text=True, capture_output=True, timeout=3,
+    )
+    if result.returncode != 0:
+        return result.returncode
+    try:
+        children = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return 1
+    root = entry.get("menus") or []
+    if not update_expanded(root, action, children):
+        return 1
+    save_state(state)
+    return 0
+
+
+if len(sys.argv) == 1 or sys.argv[1] == "snapshot":
+    snapshot(sys.argv[2] if len(sys.argv) > 2 else "")
+elif sys.argv[1] == "activate" and len(sys.argv) == 4:
+    raise SystemExit(activate(sys.argv[2], sys.argv[3]))
+elif sys.argv[1] == "expand" and len(sys.argv) == 4:
+    raise SystemExit(expand(sys.argv[2], sys.argv[3]))
+else:
+    print("usage: noctalia-global-menu [snapshot|activate|expand OUTPUT JSON]", file=sys.stderr)
+    raise SystemExit(2)

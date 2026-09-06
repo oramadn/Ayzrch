@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# Sync only the canonical Hyprlock solid background into Noctalia Greeter.
+# The privileged Noctalia helper owns installation and file ownership.
+set -eu
+
+BACKGROUND_FILE="${HOME:?}/.cache/orbit-wallpaper-engine/hyprlock-background.conf"
+LIVE_SYNC="/var/lib/noctalia-greeter/sync.toml"
+APPLY="/usr/bin/noctalia-greeter-apply-appearance"
+
+color=$(
+    sed -n 's/^[[:space:]]*color[[:space:]]*=[[:space:]]*rgb(\([0-9A-Fa-f]\{6\}\))[[:space:]]*$/\1/p' "$BACKGROUND_FILE" \
+        | sed -n '1p'
+)
+[ -n "$color" ] || exit 0
+
+# Avoid asking for administrator approval when the greeter already matches.
+if [ -r "$LIVE_SYNC" ] && grep -Fq "fill_color = \"color:#$color\"" "$LIVE_SYNC"; then
+    exit 0
+fi
+
+stage=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/orbit-noctalia-greeter.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+
+if [ -r "$LIVE_SYNC" ]; then
+    cp "$LIVE_SYNC" "$stage/sync.toml"
+else
+    exit 1
+fi
+
+python3 - "$stage/sync.toml" "color:#$color" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+value = sys.argv[2]
+lines = path.read_text().splitlines()
+for index, line in enumerate(lines):
+    if line.strip().startswith("fill_color ="):
+        lines[index] = f'fill_color = "{value}"'
+        break
+else:
+    table = next((index for index, line in enumerate(lines)
+                  if line.strip() == "[appearance.wallpaper]"), None)
+    if table is None:
+        lines.extend(["", "[appearance.wallpaper]"])
+        table = len(lines) - 1
+    lines.insert(table + 1, f'fill_color = "{value}"')
+path.write_text("\n".join(lines).rstrip() + "\n")
+PY
+
+pkexec "$APPLY" "$stage"

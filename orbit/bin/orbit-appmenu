@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Expose registrar-backed and directly owned DBusMenu applications as JSON."""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+
+import dbus
+
+
+REGISTRAR = "com.canonical.AppMenu.Registrar"
+REGISTRAR_PATH = "/com/canonical/AppMenu/Registrar"
+REGISTRAR_IFACE = "com.canonical.AppMenu.Registrar"
+MENU_IFACE = "com.canonical.dbusmenu"
+DBUS = "org.freedesktop.DBus"
+DBUS_PATH = "/org/freedesktop/DBus"
+INTROSPECTABLE = "org.freedesktop.DBus.Introspectable"
+CACHE_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "noctalia-global-menu-dbus-cache.json"
+)
+
+
+def command(*args):
+    return subprocess.run(args, check=False, text=True, capture_output=True).stdout
+
+
+def xwindows():
+    raw = command("xprop", "-root", "_NET_CLIENT_LIST")
+    return re.findall(r"0x[0-9a-fA-F]+", raw)
+
+
+def xproperties(window):
+    raw = command(
+        "xprop",
+        "-id",
+        window,
+        "_NET_WM_PID",
+        "WM_CLASS",
+        "_NET_WM_NAME",
+        "WM_NAME",
+    )
+    pid_match = re.search(r"_NET_WM_PID\([^)]*\) = (\d+)", raw)
+    class_match = re.search(r'WM_CLASS\([^)]*\) = "([^"]*)", "([^"]*)"', raw)
+    name_match = re.search(r'_NET_WM_NAME\([^)]*\) = "(.*)"', raw)
+    if not name_match:
+        name_match = re.search(r'WM_NAME\([^)]*\) = "(.*)"', raw)
+    return {
+        "windowId": int(window, 16),
+        "pid": int(pid_match.group(1)) if pid_match else 0,
+        "wmClass": class_match.group(2) if class_match else "",
+        "title": name_match.group(1) if name_match else "",
+    }
+
+
+def hyprland_clients(address_filter=""):
+    try:
+        result = subprocess.run(
+            ["hyprctl", "clients", "-j"], check=True, text=True, capture_output=True
+        )
+        clients = json.loads(result.stdout)
+        return [
+            client for client in clients
+            if not address_filter or str(client.get("address", "")) == address_filter
+        ]
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return []
+
+
+def menu_for(bus, window_id):
+    try:
+        registrar = bus.get_object(REGISTRAR, REGISTRAR_PATH)
+        method = dbus.Interface(registrar, REGISTRAR_IFACE).GetMenuForWindow
+        service, path = method(dbus.UInt32(window_id))
+        return str(service), str(path)
+    except dbus.DBusException:
+        return None
+
+
+def load_direct_cache():
+    try:
+        with open(CACHE_PATH, encoding="utf-8") as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_direct_cache(cache):
+    directory = CACHE_PATH.rsplit("/", 1)[0]
+    try:
+        os.makedirs(directory, exist_ok=True)
+        temporary = CACHE_PATH + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(cache, stream, separators=(",", ":"))
+        os.replace(temporary, CACHE_PATH)
+    except OSError:
+        pass
+
+
+def bus_names(bus):
+    try:
+        result = subprocess.run(
+            ["busctl", "--user", "list", "--no-legend"],
+            check=True, text=True, capture_output=True, timeout=3,
+        )
+        names = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1].isdigit():
+                names.append((fields[0], int(fields[1])))
+        if names:
+            return names
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        dbus_api = dbus.Interface(
+            bus.get_object(DBUS, DBUS_PATH, introspect=False), DBUS
+        )
+        return [(str(name), owner_pid(bus, str(name))) for name in dbus_api.ListNames()]
+    except dbus.DBusException:
+        return []
+
+
+def owner_pid(bus, name):
+    try:
+        return int(dbus.Interface(bus.get_object(DBUS, DBUS_PATH), DBUS)
+                   .GetConnectionUnixProcessID(name))
+    except dbus.DBusException:
+        return 0
+
+
+def menu_paths(bus, service):
+    paths = ["/com/canonical/menu/0"]
+    try:
+        xml = dbus.Interface(
+            bus.get_object(service, "/com/canonical/menu", introspect=False), INTROSPECTABLE
+        ).Introspect(timeout=0.25)
+        root = ET.fromstring(str(xml))
+        for node in root.findall("node"):
+            name = node.get("name", "")
+            if name.isdigit():
+                paths.append("/com/canonical/menu/" + name)
+    except (dbus.DBusException, ET.ParseError):
+        pass
+    return list(dict.fromkeys(paths))
+
+
+def direct_layout(bus, service, path):
+    try:
+        remote = bus.get_object(service, path, introspect=False)
+        menu = dbus.Interface(remote, MENU_IFACE)
+        revision, layout = menu.GetLayout(
+            dbus.Int32(0), dbus.Int32(-1),
+            dbus.Array(["label", "visible", "enabled", "children-display"], signature="s"),
+            timeout=0.25,
+        )
+        return {"revision": int(revision), "root": convert_layout(
+            layout, service, path, "direct-dbusmenu"
+        )}
+    except dbus.DBusException:
+        return None
+
+
+def convert_layout(node, service="", path="", source=""):
+    item_id, properties, children = node
+    result = {
+        "id": int(item_id),
+        "properties": {
+            str(key): plain(value) for key, value in properties.items()
+            if str(key) != "icon-data"
+        },
+        "children": [convert_layout(child, service, path, source) for child in children],
+    }
+    if source:
+        result.update({"source": source, "service": service, "path": path})
+    return result
+
+
+def direct_menu_for_pid(bus, pid, cache):
+    key = str(pid)
+    cached = cache.get(key)
+    names = bus_names(bus)
+    owned = [name for name, process_pid in names if process_pid == pid]
+    ordered = []
+    if cached and cached.get("service") in owned:
+        ordered.append((cached["service"], cached.get("path", "")))
+    ordered.extend(
+        (name, "") for name in sorted(owned, key=lambda name: (name.startswith(":"), name))
+        if name != (cached or {}).get("service")
+    )
+    for service, cached_path in ordered:
+        paths = [cached_path] if cached_path else menu_paths(bus, service)
+        for path in paths:
+            if not path:
+                continue
+            layout = direct_layout(bus, service, path)
+            if layout is not None:
+                cache[key] = {"service": service, "path": path}
+                return service, path, layout
+    cache.pop(key, None)
+    return None
+
+
+def plain(value):
+    if isinstance(value, dict):
+        return {str(key): plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def layout_for(bus, service, path):
+    menu = bus.get_object(service, path)
+    revision, layout = dbus.Interface(menu, MENU_IFACE).GetLayout(
+        dbus.Int32(0), dbus.Int32(-1), dbus.Array([], signature="s")
+    )
+
+    return {"revision": int(revision), "root": convert_layout(layout)}
+
+
+def snapshot(window_filter=""):
+    bus = dbus.SessionBus()
+    entries = []
+    direct_cache = load_direct_cache()
+    windows = [window_filter] if window_filter else xwindows()
+    for window in windows:
+        properties = xproperties(window)
+        menu = menu_for(bus, properties["windowId"])
+        if not menu:
+            continue
+        service, path = menu
+        try:
+            layout = layout_for(bus, service, path)
+        except dbus.DBusException:
+            continue
+        properties.update({"service": service, "path": path, "layout": layout})
+        entries.append(properties)
+    clients = hyprland_clients(window_filter)
+    for client in clients:
+        pid = int(client.get("pid") or 0)
+        if not pid:
+            continue
+        direct = direct_menu_for_pid(bus, pid, direct_cache)
+        if not direct:
+            continue
+        service, path, layout = direct
+        entries.append({
+            "windowId": 0,
+            "pid": pid,
+            "address": str(client.get("address") or ""),
+            "wmClass": str(client.get("class") or ""),
+            "title": str(client.get("title") or ""),
+            "service": service,
+            "path": path,
+            "source": "dbusmenu-direct",
+            "layout": layout,
+        })
+    save_direct_cache(direct_cache)
+    print(json.dumps(entries, separators=(",", ":")))
+
+
+def event(bus, service, path, item_id):
+    remote = bus.get_object(service, path, introspect=False)
+    dbus.Interface(remote, MENU_IFACE).Event(
+        dbus.Int32(int(item_id)), "clicked", dbus.String("", variant_level=1),
+        dbus.UInt32(int(time.time()))
+    )
+
+
+def activate(window_id, item_id):
+    bus = dbus.SessionBus()
+    menu = menu_for(bus, int(window_id))
+    if not menu:
+        return 1
+    service, path = menu
+    event(bus, service, path, item_id)
+    return 0
+
+
+def activate_direct(service, path, item_id):
+    bus = dbus.SessionBus()
+    event(bus, service, path, item_id)
+    return 0
+
+
+def expand_direct(service, path, item_id):
+    item_id = int(item_id)
+    try:
+        bus = dbus.SessionBus()
+        remote = bus.get_object(service, path, introspect=False)
+        menu = dbus.Interface(remote, MENU_IFACE)
+        menu.AboutToShow(dbus.Int32(item_id), timeout=0.25)
+        properties = [
+            "label", "visible", "enabled", "type", "toggle-type", "toggle-state",
+            "shortcut", "children-display",
+        ]
+        revision, layout = menu.GetLayout(
+            dbus.Int32(item_id), dbus.Int32(-1),
+            dbus.Array(properties, signature="s"),
+            timeout=0.25,
+        )
+        converted = convert_layout(layout, service, path, "direct-dbusmenu")
+        children = converted.get("children", [])
+        print(json.dumps(children, separators=(",", ":")))
+        return 0
+    except dbus.DBusException:
+        raise
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1 or sys.argv[1] == "snapshot":
+        snapshot(sys.argv[2] if len(sys.argv) > 2 else "")
+        raise SystemExit(0)
+    if sys.argv[1] == "activate" and len(sys.argv) == 4:
+        raise SystemExit(activate(int(sys.argv[2]), int(sys.argv[3])))
+    if sys.argv[1] == "activate-direct" and len(sys.argv) == 5:
+        raise SystemExit(activate_direct(sys.argv[2], sys.argv[3], int(sys.argv[4])))
+    if sys.argv[1] == "expand-direct" and len(sys.argv) == 5:
+        raise SystemExit(expand_direct(sys.argv[2], sys.argv[3], int(sys.argv[4])))
+    print("usage: orbit-appmenu [snapshot|activate WINDOW_ID ITEM_ID]", file=sys.stderr)
+    raise SystemExit(2)

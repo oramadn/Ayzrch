@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+# Deliberately not `loginctl lock-session`: Noctalia answers the logind Lock
+# signal itself and locks immediately, racing this animated transition. Driving
+# the transition directly keeps a single locker, and it engages Noctalia's lock
+# at the end through scripts/noctalia-lock.
+exec "$HOME/.config/hypr/scripts/start-noctalia-lock"

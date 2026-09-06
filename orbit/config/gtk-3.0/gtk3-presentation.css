@@ -1,0 +1,17 @@
+/* Static GTK3 presentation choices. Palette values come from noctalia.css. */
+
+button:not(.flat):not(.circular),
+entry,
+spinbutton > entry,
+combobox > box {
+    border-radius: 8px;
+}
+
+.card {
+    border-radius: 10px;
+}
+
+popover.menu,
+popover.menu > box {
+    border-radius: 10px;
+}

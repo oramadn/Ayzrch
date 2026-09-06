@@ -1,0 +1,11 @@
+#!/bin/bash
+# Compatibility entry point for the canonical Orbit theme apply path.
+
+set -euo pipefail
+
+HOME="${HOME:?HOME is required}"
+PALETTE="${1:-$("$HOME/.local/bin/orbit-theme" current)}"
+
+# orbit-theme owns palette generation, active adapter installation, and the
+# Hyprlock adapter refresh. Keep this stable public entry point for callers.
+exec "$HOME/.local/bin/orbit-theme" apply "$PALETTE"

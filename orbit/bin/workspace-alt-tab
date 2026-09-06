@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Workspace-oriented Alt-Tab controller for Hyprland ScrollOverview."""
+
+import fcntl
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+STATE = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "workspace-alt-tab.json"
+LOCK = STATE.with_suffix(".lock")
+SCROLL = Path.home() / ".local/bin/orbit-scrolloverview"
+
+
+def hypr(*args):
+    return json.loads(subprocess.check_output(["hyprctl", *args, "-j"], text=True))
+
+
+def dispatch(*args):
+    if args and args[0] == "workspace":
+        expression = f'hl.dsp.focus({{ workspace = "{args[1]}" }})'
+        subprocess.run(["hyprctl", "dispatch", expression], check=True, stdout=subprocess.DEVNULL)
+        return
+    subprocess.run(["hyprctl", "dispatch", *args], check=True, stdout=subprocess.DEVNULL)
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"open": False, "monitor": "", "selected": "", "mru": []}
+
+
+def save_state(state):
+    temporary = STATE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, separators=(",", ":")))
+    os.replace(temporary, STATE)
+
+
+def is_home_rule(rule, monitor):
+    return (
+        str(rule.get("monitor") or "") == monitor
+        and rule.get("persistent") is True
+        and rule.get("default") is True
+    )
+
+
+def live_monitor_names():
+    try:
+        return {
+            str(item.get("name"))
+            for item in hypr("monitors")
+            if item.get("name")
+        }
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return set()
+
+
+def resolve_cycle_monitor(state, active_monitor, available_monitors):
+    if not state.get("open"):
+        state["monitor"] = active_monitor
+        return active_monitor
+    pinned = str(state.get("monitor") or "")
+    if pinned in available_monitors:
+        return pinned
+    if active_monitor in available_monitors:
+        state["monitor"] = active_monitor
+        return active_monitor
+    return ""
+
+
+def workspace_items(monitor, include_virtual=True):
+    result = []
+    live_workspaces = {}
+    for item in hypr("workspaces"):
+        name = str(item.get("name") or item.get("id") or "")
+        if name and not name.startswith("special:") and str(item.get("monitor")) == monitor:
+            result.append({"key": f"{monitor}:{name}", "name": name})
+            live_workspaces[name] = item
+    try:
+        rules = hypr("workspacerules")
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        rules = []
+    has_live_blank_home = False
+    for rule in rules:
+        name = str(rule.get("workspaceString") or rule.get("workspace") or "")
+        rule_monitor = str(rule.get("monitor") or "")
+        if (
+            name
+            and not name.startswith("special:")
+            and is_home_rule(rule, monitor)
+        ):
+            live = live_workspaces.get(name)
+            if live is not None and live.get("windows", 0) == 0:
+                has_live_blank_home = True
+    if include_virtual and not has_live_blank_home:
+        numeric_names = []
+        for item in result:
+            try:
+                numeric_names.append(int(item["name"]))
+            except ValueError:
+                pass
+        if numeric_names:
+            virtual_name = str(max(numeric_names) + 1)
+            if not any(item["name"] == virtual_name for item in result):
+                result.append({"key": f"{monitor}:{virtual_name}", "name": virtual_name})
+    return result
+
+
+def stable_items(items):
+    def sort_key(item):
+        try:
+            return (0, int(item["name"]))
+        except ValueError:
+            return (1, item["name"])
+
+    return sorted(items, key=sort_key)
+
+
+def cycle():
+    active = hypr("activeworkspace")
+    monitor = str(active.get("monitor") or "")
+    current = str(active.get("name") or active.get("id") or "")
+    current_key = f"{monitor}:{current}"
+    state = load_state()
+    if state.get("open"):
+        monitor = resolve_cycle_monitor(state, monitor, live_monitor_names())
+        if not monitor:
+            return
+    else:
+        monitor = resolve_cycle_monitor(state, monitor, {monitor})
+    current_key = f"{monitor}:{current}"
+    items = workspace_items(monitor, include_virtual=not state.get("open"))
+    if state.get("open") and state.get("virtual"):
+        virtual_key = f"{monitor}:{state['virtual']}"
+        if not any(item["key"] == virtual_key for item in items):
+            items.append({"key": virtual_key, "name": state["virtual"]})
+    if not any(item["key"] == current_key for item in items):
+        items.append({"key": current_key, "name": current})
+    items = stable_items(items)
+    if not items:
+        return
+
+    if not state.get("open"):
+        mru = [current_key] + [key for key in state.get("mru", []) if key != current_key]
+        target = next((key for key in mru[1:] if any(item["key"] == key for item in items)), "")
+        if not target:
+            index = next(i for i, item in enumerate(items) if item["key"] == current_key)
+            target = items[(index + 1) % len(items)]["key"]
+        virtual = max(
+            (int(item["name"]) for item in items if item["name"].isdigit()),
+            default=0,
+        )
+        state.update({"open": True, "monitor": monitor, "selected": target, "mru": mru[:64], "virtual": str(virtual)})
+        save_state(state)
+        subprocess.run([str(SCROLL), "open"], check=True)
+        target_item = next(item for item in items if item["key"] == target)
+        dispatch("workspace", target_item["name"])
+        return
+
+    state["mru"] = [current_key] + [key for key in state.get("mru", []) if key != current_key]
+    if state.get("monitor") != monitor:
+        state.update({"monitor": monitor, "selected": current_key})
+    index = next((i for i, item in enumerate(items) if item["key"] == state.get("selected")), -1)
+    target = items[(index + 1) % len(items)]
+    state["selected"] = target["key"]
+    save_state(state)
+    dispatch("workspace", target["name"])
+
+
+def close():
+    state = load_state()
+    state["open"] = False
+    state["monitor"] = ""
+    state["selected"] = ""
+    state["virtual"] = ""
+    save_state(state)
+    subprocess.run([str(SCROLL), "close"], check=False)
+
+
+def main():
+    STATE.parent.mkdir(mode=0o700, exist_ok=True)
+    with LOCK.open("w") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        if sys.argv[1:] == ["cycle"]:
+            cycle()
+        elif sys.argv[1:] in (["close"], ["close-state"]):
+            close()
+        else:
+            raise SystemExit("usage: workspace-alt-tab {cycle|close}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+# Control only the live Noctalia session chrome. No retired shell surfaces are
+# involved; Noctalia owns the slide animation for both commands.
+set -u
+
+mode=${1:?usage: orbit-noctalia-session-chrome exit|hide-start|intro|show}
+animation_seconds="0.45"
+
+now_ms() {
+    date +%s%3N
+}
+
+send() {
+    printf 'noctalia-%s-ipc-ms=%s\n' "$1" "$(now_ms)" >&2
+    noctalia msg "$@" >/dev/null 2>&1 || true
+}
+
+hide() {
+    send bar-hide Top &
+    send dock-hide &
+    wait
+}
+
+show() {
+    send bar-show Top &
+    send dock-show &
+    wait
+
+    # Noctalia restores the layer-shell exclusive zones synchronously, but wait
+    # for Hyprland to publish the new reserved geometry before returning.
+    for _ in {1..20}; do
+        if hyprctl monitors -j 2>/dev/null | jq -e \
+            'all(.[]; ((.reserved // [0, 0, 0, 0]) | add) > 0)' >/dev/null; then
+            return 0
+        fi
+        sleep 0.01
+    done
+    return 1
+}
+
+case "$mode" in
+    exit)
+        hide
+        sleep "$animation_seconds"
+        ;;
+    hide-start)
+        hide
+        ;;
+    intro|show)
+        show
+        ;;
+    *)
+        printf 'usage: %s exit|hide-start|intro|show\n' "${0##*/}" >&2
+        exit 2
+        ;;
+esac

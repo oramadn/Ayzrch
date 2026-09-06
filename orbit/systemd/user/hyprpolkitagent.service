@@ -1,0 +1,15 @@
+[Unit]
+Description=Hyprland Polkit Authentication Agent
+PartOf=hyprland-session.target
+After=hyprland-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/hyprpolkitagent/hyprpolkitagent
+Slice=session.slice
+TimeoutStopSec=5sec
+Restart=on-failure
+
+[Install]
+WantedBy=hyprland-session.target

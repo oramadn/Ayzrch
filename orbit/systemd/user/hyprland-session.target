@@ -1,0 +1,10 @@
+[Unit]
+Description=Hyprland graphical session
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+Wants=syncthing.service
+Wants=workspace-alt-tab-input.service
+Wants=workspace-alt-tab-release.service
+Wants=new-workspace-apps.service
+After=graphical-session-pre.target
+Before=graphical-session.target

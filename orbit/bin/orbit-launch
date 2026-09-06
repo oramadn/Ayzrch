@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""Launch commands with Qt6-only Orbit styling when safely identifiable."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+
+HOME = Path.home()
+ORBIT = HOME / ".config/orbit"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "orbit/launch-classification.json"
+MAX_CACHE_ENTRIES = 512
+MAX_SCRIPT_BYTES = 131072
+MAX_ELF_SCAN_BYTES = 16 * 1024 * 1024
+
+NATIVE_QT6 = "native-qt6"
+NATIVE_QT5 = "native-qt5"
+FLATPAK = "flatpak"
+NON_QT = "non-qt"
+UNKNOWN = "unknown"
+
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+QT6_LIBRARY = re.compile(rb"libQt6(?:Core|Gui|Widgets|Quick|Qml)\.so(?:\.[0-9]+)*")
+QT5_LIBRARY = re.compile(rb"libQt5(?:Core|Gui|Widgets|Quick|Qml)\.so(?:\.[0-9]+)*")
+SHELLS = {"sh", "bash", "dash", "zsh", "fish"}
+SHELL_BUILTINS = {"cd", "true", "false", "printf", "echo", "pwd", "set", "export", "umask"}
+WRAPPERS = {"command", "exec", "nohup", "setsid", "sudo", "pkexec", "ionice"}
+FLATPAK_COMMANDS = {"flatpak", "flatpak-spawn"}
+
+
+def load_cache() -> dict:
+    try:
+        value = json.loads(CACHE.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def save_cache(cache: dict) -> None:
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=CACHE.parent, delete=False) as stream:
+        json.dump(cache, stream, sort_keys=True)
+        stream.write("\n")
+        temporary = Path(stream.name)
+    os.replace(temporary, CACHE)
+
+
+def cache_key(path: Path) -> str | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return f"{path.resolve()}:{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def cached_path_classification(path: Path, classify) -> str:
+    key = cache_key(path)
+    cache = load_cache()
+    if key and key in cache:
+        return str(cache[key])
+
+    result = classify(path)
+    if key:
+        cache[key] = result
+        while len(cache) > MAX_CACHE_ENTRIES:
+            del cache[next(iter(cache))]
+        save_cache(cache)
+    return result
+
+
+def resolve_command(token: str) -> Path | None:
+    if not token or token.startswith("$"):
+        return None
+    if "/" in token:
+        path = Path(token).expanduser()
+        return path if path.is_file() else None
+    resolved = os.environ.get("PATH", "")
+    for directory in resolved.split(os.pathsep):
+        candidate = Path(directory or ".") / token
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def elf_classification(path: Path) -> str | None:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            header = stream.read(4)
+        if header != b"\x7fELF":
+            return None
+        if size > MAX_ELF_SCAN_BYTES:
+            result = subprocess.run(
+                ["readelf", "-d", "--", str(path)],
+                check=False,
+                capture_output=True,
+                timeout=1.0,
+            )
+            data = result.stdout
+        else:
+            data = path.read_bytes()
+    except (OSError, UnicodeError):
+        return None
+    except subprocess.TimeoutExpired:
+        return UNKNOWN
+    qt6 = bool(QT6_LIBRARY.search(data))
+    qt5 = bool(QT5_LIBRARY.search(data))
+    if qt6 and not qt5:
+        return NATIVE_QT6
+    if qt5 and not qt6:
+        return NATIVE_QT5
+    return UNKNOWN if qt5 and qt6 else NON_QT
+
+
+def script_tokens(line: str) -> list[str]:
+    try:
+        return shlex.split(line, comments=True, posix=True)
+    except ValueError:
+        return []
+
+
+def script_classification(path: Path, depth: int, visited: set[Path]) -> str:
+    try:
+        source = path.read_text(errors="replace")[:MAX_SCRIPT_BYTES]
+    except OSError:
+        return UNKNOWN
+
+    if re.search(r"\b(?:PyQt6|PySide6)\b", source):
+        return NATIVE_QT6
+    if re.search(r"\b(?:PyQt5|PySide2)\b", source):
+        return NATIVE_QT5
+
+    result = UNKNOWN
+    for line in source.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        tokens = script_tokens(line)
+        if not tokens:
+            continue
+        if tokens[0] in FLATPAK_COMMANDS:
+            return FLATPAK
+        if tokens[0] in {"exec", "env"} or stripped.startswith(("exec ", "env ")):
+            result = classify_tokens(tokens, depth + 1, visited)
+            if result in {NATIVE_QT6, NATIVE_QT5, FLATPAK}:
+                return result
+    return result
+
+
+def classify_path(path: Path, depth: int = 0, visited: set[Path] | None = None) -> str:
+    if depth > 5:
+        return UNKNOWN
+    visited = visited or set()
+    try:
+        path = path.resolve()
+    except OSError:
+        return UNKNOWN
+    if path in visited:
+        return UNKNOWN
+    visited.add(path)
+
+    def inspect(candidate: Path) -> str:
+        elf = elf_classification(candidate)
+        if elf is not None:
+            return elf
+        return script_classification(candidate, depth + 1, visited)
+
+    return cached_path_classification(path, inspect)
+
+
+def classify_tokens(tokens: list[str], depth: int = 0, visited: set[Path] | None = None) -> str:
+    if depth > 6:
+        return UNKNOWN
+    visited = visited or set()
+    tokens = list(tokens)
+    while tokens and (ASSIGNMENT.match(tokens[0]) or tokens[0] in {";", "&&", "||", "|"}):
+        tokens.pop(0)
+    if not tokens:
+        return NON_QT
+
+    first = Path(tokens[0]).name
+    if first in FLATPAK_COMMANDS:
+        return FLATPAK
+
+    if first == "env":
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                break
+            if token in {"-i", "--ignore-environment"}:
+                index += 1
+                continue
+            if token in {"-u", "--unset"}:
+                index += 2
+                continue
+            if ASSIGNMENT.match(token):
+                index += 1
+                continue
+            break
+        return classify_tokens(tokens[index:], depth + 1, visited)
+
+    if first in WRAPPERS:
+        return classify_tokens(tokens[1:], depth + 1, visited)
+
+    if first in SHELLS:
+        if len(tokens) >= 3 and tokens[1] in {"-c", "-lc", "-xc"}:
+            return classify_shell(tokens[2], depth + 1, visited)
+        if len(tokens) >= 2:
+            script = resolve_command(tokens[1])
+            return classify_path(script, depth + 1, visited) if script else UNKNOWN
+        return UNKNOWN
+
+    if first.startswith("python") or first in {"pypy", "pypy3"}:
+        if len(tokens) >= 2 and tokens[1].endswith((".py", ".pyw")):
+            script = resolve_command(tokens[1]) or Path(tokens[1]).expanduser()
+            return classify_path(script, depth + 1, visited) if script.is_file() else UNKNOWN
+        return NON_QT
+
+    path = resolve_command(tokens[0])
+    if path is None:
+        return UNKNOWN
+    return classify_path(path, depth + 1, visited)
+
+
+def classify_shell(command: str) -> str:
+    try:
+        tokens = shlex.split(command, comments=False, posix=True)
+    except ValueError:
+        return UNKNOWN
+    if not tokens:
+        return NON_QT
+
+    # Desktop Exec strings are normally one command. Continue past harmless
+    # shell setup so a command such as `cd DIR && app` is still classifiable.
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in {";", "&&", "||", "|", "&"}:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    for segment in segments:
+        result = classify_tokens(segment)
+        if result in {NATIVE_QT6, NATIVE_QT5, FLATPAK}:
+            return result
+        if segment and Path(segment[0]).name not in SHELL_BUILTINS:
+            return result
+    return NON_QT
+
+
+def scoped_environment(kind: str) -> dict[str, str]:
+    environment = os.environ.copy()
+    if kind != NATIVE_QT6:
+        return environment
+
+    environment["QT_QPA_PLATFORMTHEME"] = "hyprqt6engine"
+    # Temporary until the installed Hypr style plugin advertises hypr-style.
+    environment["QT_STYLE_OVERRIDE"] = "Fusion"
+    return environment
+
+
+def run_shell(command: str) -> int:
+    kind = classify_shell(command)
+    environment = scoped_environment(kind)
+    if kind == NATIVE_QT6:
+        command = "export QT_QPA_PLATFORMTHEME=hyprqt6engine QT_STYLE_OVERRIDE=Fusion; " + command
+    os.execvpe("/bin/sh", ["sh", "-lc", command], environment)
+    return 127
+
+
+def run_argv(arguments: list[str]) -> int:
+    if not arguments:
+        print("usage: orbit-launch [--shell-command COMMAND] COMMAND [ARG ...]", file=sys.stderr)
+        return 2
+    kind = classify_tokens(arguments)
+    environment = scoped_environment(kind)
+    os.execvpe(arguments[0], arguments, environment)
+    return 127
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "classify":
+        arguments = arguments[1:]
+        if arguments[:1] == ["--shell-command"] and len(arguments) == 2:
+            print(classify_shell(arguments[1]))
+            return 0
+        print(classify_tokens(arguments))
+        return 0
+    if arguments[:1] == ["--shell-command"] and len(arguments) == 2:
+        return run_shell(arguments[1])
+    return run_argv(arguments)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

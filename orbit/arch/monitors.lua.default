@@ -1,0 +1,11 @@
+-- Fallback monitor configuration, seeded by scripts/15-orbit.sh.
+--
+-- Run `nwg-displays` to replace this with your real layout. This file is
+-- machine-local: it is a regular file, never a symlink into the repository,
+-- because nwg-displays rewrites it in place.
+hl.monitor({
+    output   = "",
+    mode     = "preferred",
+    position = "auto",
+    scale    = "auto",
+})

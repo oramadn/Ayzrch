@@ -1,0 +1,28 @@
+[shape]
+button_shape = "rounded"
+corner_radius = 11
+
+[icons]
+theme = "kora"
+
+[cursor]
+theme = "oblique-cursor"
+size = 24
+
+[typography.display]
+family = "JetBrains Mono"
+size = 14.0
+
+[typography.body]
+family = "JetBrains Mono"
+size = 10.0
+
+[typography.monospace]
+family = "JetBrains Mono"
+size = 10.0
+
+[transparency.surfaces]
+window_background = 0.2
+menu = 0.8
+sidebar = 0.2
+header = 0.2

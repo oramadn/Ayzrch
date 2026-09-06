@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_url="https://github.com/yayuuu/hyprland-scroll-overview.git"
+repo_commit="f9248ab6bee770e9d68813b48cc6ca12b3271254"
+reference_hyprland="efb50993780079460b0cbed1363e2166a2de1d9f"
+source_dir="${ORBIT_PLUGIN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/orbit-hyprland-plugins}/scrolloverview-$repo_commit"
+plugin_dir="${ORBIT_PLUGIN_DIR:-$HOME/.local/share/hyprland/plugins}"
+
+command -v git >/dev/null || { printf '%s\n' 'error: git is required' >&2; exit 1; }
+command -v make >/dev/null || { printf '%s\n' 'error: make is required' >&2; exit 1; }
+command -v g++ >/dev/null || { printf '%s\n' 'error: g++ is required' >&2; exit 1; }
+command -v pkg-config >/dev/null || { printf '%s\n' 'error: pkg-config is required' >&2; exit 1; }
+
+for package in hyprland pixman-1 libdrm pangocairo libinput libudev wayland-server xkbcommon; do
+    pkg-config --exists "$package" || {
+        printf 'error: required development package is unavailable: %s\n' "$package" >&2
+        exit 1
+    }
+done
+if ! pkg-config --exists 'lua5.4 >= 5.4' && ! pkg-config --exists 'lua >= 5.4'; then
+    printf '%s\n' 'error: Lua 5.4 development package is unavailable' >&2
+    exit 1
+fi
+
+if command -v hyprctl >/dev/null && command -v python3 >/dev/null; then
+    running_commit=$(hyprctl version -j 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))' || true)
+    if [[ -n "$running_commit" && "$running_commit" != "$reference_hyprland" ]]; then
+        printf 'warning: building ScrollOverview for Hyprland ABI %s, not validated reference %s\n' "$running_commit" "$reference_hyprland" >&2
+    fi
+else
+    printf '%s\n' 'warning: hyprctl/python3 unavailable; Hyprland ABI was not inspected' >&2
+fi
+
+if [[ ! -d "$source_dir/.git" ]]; then
+    mkdir -p "${source_dir%/*}"
+    git clone --filter=blob:none "$repo_url" "$source_dir"
+fi
+
+git -C "$source_dir" fetch --quiet --depth=1 origin "$repo_commit"
+git -C "$source_dir" checkout --quiet --detach "$repo_commit"
+git -C "$source_dir" reset --quiet --hard "$repo_commit"
+[[ "$(git -C "$source_dir" rev-parse HEAD)" == "$repo_commit" ]] || {
+    printf '%s\n' 'error: ScrollOverview checkout did not reach the pinned commit' >&2
+    exit 1
+}
+
+(
+    cd "$source_dir"
+    make clean >/dev/null 2>&1 || true
+    make all
+    mkdir -p "$plugin_dir"
+    install -m 0755 scrolloverview.so "$plugin_dir/libscrolloverview.so"
+)
+printf '%s\n' "Installed $plugin_dir/libscrolloverview.so for the next Hyprland session; the running compositor was not touched."

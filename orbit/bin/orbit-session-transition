@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+
+# Authoritative session lifecycle coordinator. Workspace staging is the only
+# compositor-owned visual transition surface; no Orbit layer-shell curtain is used.
+set -u
+
+state_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/orbit-session-transition"
+state_file="$state_dir/state"
+lock_file="$state_dir/lock"
+staging="$HOME/.local/bin/orbit-transition-workspace"
+session_workspaces="$HOME/.local/bin/orbit-session-workspaces"
+session_chrome="$HOME/.local/bin/orbit-noctalia-session-chrome"
+session_sound="$HOME/.local/bin/play-session-sound"
+wallpaper_status="$HOME/.cache/orbit-wallpaper-engine/status"
+wallpaper_control="$HOME/.cache/orbit-wallpaper-engine/control"
+wallpaper_events="$HOME/.cache/orbit-wallpaper-engine/events"
+session_target=hyprland-session.target
+hyprlock_bin="${ORBIT_HYPRLOCK_BIN:-hyprlock}"
+wallpaper_reader_pid=""
+wallpaper_event_file=""
+visual_overlap_seconds="0.15"
+
+mkdir -p "$state_dir"
+
+log() {
+    printf 'orbit-session-transition: %s\n' "$*" >&2
+}
+
+now_ms() {
+    date +%s%3N
+}
+
+set_state() {
+    local state="$1" detail="${2:-}"
+    printf 'state=%s\ndetail=%s\n' "$state" "$detail" >"$state_file.tmp"
+    mv -f "$state_file.tmp" "$state_file"
+}
+
+status() {
+    if [ -f "$state_file" ]; then
+        cat "$state_file"
+    else
+        printf 'state=idle\ndetail=none\n'
+    fi
+}
+
+deadline_after() {
+    printf '%s\n' "$(( $(date +%s) + $1 ))"
+}
+
+wait_noctalia_ready() {
+    local deadline="$1"
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if noctalia msg status >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.05
+    done
+    return 1
+}
+
+wait_wallpaper_ready() {
+    local deadline="$1" readiness
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if systemctl --user is-active --quiet orbit-wallpaper-engine.service \
+            && [ -f "$wallpaper_status" ]; then
+            readiness="$(awk -F= '$1 == "readiness" { print $2; exit }' \
+                "$wallpaper_status" 2>/dev/null || true)"
+            [ "$readiness" = ready ] && return 0
+        fi
+        sleep 0.05
+    done
+    return 1
+}
+
+wallpaper_transition_start() {
+    local command="$1" timeout_seconds="$2" id="orbit-$(date +%s%N)"
+    wallpaper_event_file="$(mktemp "$state_dir/event.XXXXXX")" || return 1
+    wait_wallpaper_ready "$(deadline_after 2)" || {
+        rm -f "$wallpaper_event_file"
+        wallpaper_event_file=""
+        return 1
+    }
+    [ -p "$wallpaper_control" ] && [ -p "$wallpaper_events" ] || {
+        rm -f "$wallpaper_event_file"
+        wallpaper_event_file=""
+        return 1
+    }
+    exec 3<"$wallpaper_events" || {
+        rm -f "$wallpaper_event_file"
+        wallpaper_event_file=""
+        return 1
+    }
+    (
+        timeout "$timeout_seconds" awk -v command="$command" -v id="$id" '
+            $0 ~ ("command=" command) && $0 ~ ("id=" id) && $0 ~ "phase=accepted" { accepted = 1 }
+            accepted && $0 ~ ("command=" command) && $0 ~ ("id=" id) && $0 ~ "phase=completed" { print; exit }
+        ' <&3 >"$wallpaper_event_file"
+    ) &
+    wallpaper_reader_pid=$!
+    if ! timeout 0.5s sh -c 'printf "%s\n" "$1" > "$2"' sh \
+        "$command $id" "$wallpaper_control"; then
+        kill "$wallpaper_reader_pid" 2>/dev/null || true
+        wait "$wallpaper_reader_pid" 2>/dev/null || true
+        exec 3<&-
+        rm -f "$wallpaper_event_file"
+        wallpaper_reader_pid=""
+        wallpaper_event_file=""
+        return 1
+    fi
+    log "wallpaper-$command command-issued-ms=$(now_ms)"
+    return 0
+}
+
+wallpaper_transition_wait() {
+    local result=0
+    [ -n "$wallpaper_reader_pid" ] || return 1
+    wait "$wallpaper_reader_pid" || result=$?
+    exec 3<&- || true
+    rm -f "$wallpaper_event_file"
+    wallpaper_reader_pid=""
+    wallpaper_event_file=""
+    [ "$result" -eq 0 ]
+}
+
+wallpaper_transition() {
+    wallpaper_transition_start "$1" "$2" || return 1
+    wallpaper_transition_wait
+}
+
+stage_workspaces() {
+    log "workspace-exit-dispatch-ms=$(now_ms)"
+    "$staging" exit >/dev/null 2>&1 && {
+        log "workspace-exit-complete-ms=$(now_ms)"
+        return 0
+    }
+    log 'workspace staging failed; attempting recovery'
+    "$staging" reset >/dev/null 2>&1 || true
+    return 1
+}
+
+restore_workspaces() {
+    log "workspace-enter-dispatch-ms=$(now_ms)"
+    "$staging" reset >/dev/null 2>&1 || {
+        log 'workspace restoration failed'
+        return 1
+    }
+    log "workspace-enter-complete-ms=$(now_ms)"
+    return 0
+}
+
+stage_lock_workspaces() {
+    log "session-workspace-lock-dispatch-ms=$(now_ms)"
+    "$session_workspaces" lock-start >/dev/null && {
+        log "session-workspace-lock-complete-ms=$(now_ms)"
+        return 0
+    }
+    log 'session workspace lock staging failed; attempting recovery'
+    "$session_workspaces" recover >/dev/null 2>&1 || true
+    return 1
+}
+
+wait_lock_workspaces() {
+    "$session_workspaces" lock-wait >/dev/null 2>&1 || {
+        log 'session workspace lock wait failed'
+        return 1
+    }
+}
+
+restore_lock_workspaces() {
+    log "session-workspace-unlock-dispatch-ms=$(now_ms)"
+    "$session_workspaces" unlock >/dev/null 2>&1 || {
+        log 'session workspace restoration failed'
+        return 1
+    }
+    log "session-workspace-unlock-complete-ms=$(now_ms)"
+    return 0
+}
+
+restore_visual_desktop() {
+    local wallpaper_ok=0
+    restore_workspaces || true
+    # Workspace motion is the visual anchor; wallpaper follows after the overlap.
+    sleep "$visual_overlap_seconds"
+    wallpaper_transition_start intro 8 && wallpaper_ok=1 || true
+    [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
+}
+
+run_login() {
+    local wallpaper_ok=0
+    set_state preparing login
+    wait_noctalia_ready "$(deadline_after 5)" || log 'Noctalia readiness unavailable; continuing'
+    "$session_sound" desktop-login >/dev/null 2>&1 &
+    "$session_chrome" intro || log 'Noctalia session chrome intro unavailable'
+    wait_wallpaper_ready "$(deadline_after 2)" || log 'Wallpaper readiness unavailable during login'
+    set_state transitioning login
+    restore_lock_workspaces || log 'login workspace restoration failed'
+    wallpaper_transition_start intro 8 && wallpaper_ok=1 || \
+        log 'Wallpaper intro unavailable during login'
+    [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
+    set_state interactive "wallpaper=$wallpaper_ok"
+    return 0
+}
+
+run_unlock() {
+    local wallpaper_ok=0
+    "$session_sound" desktop-unlock >/dev/null 2>&1 &
+    wallpaper_transition_start intro 8 && wallpaper_ok=1 || \
+        log 'Wallpaper intro unavailable during unlock'
+    "$session_chrome" intro || log 'Noctalia session chrome intro unavailable during unlock'
+    set_state preparing unlock
+    wait_wallpaper_ready "$(deadline_after 2)" || log 'Wallpaper readiness unavailable during unlock'
+    set_state transitioning unlock
+    restore_lock_workspaces || log 'unlock workspace restoration failed'
+    [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
+    set_state interactive "wallpaper=$wallpaper_ok"
+    return 0
+}
+
+run_lock() {
+    local wallpaper_ok=0 hyprlock_status=1 attempt
+    if pidof hyprlock >/dev/null 2>&1; then
+        set_state locked existing-hyprlock
+        return 0
+    fi
+    # Sound begins with the visual workspace transition and must not block it.
+    set_state preparing lock
+    wait_wallpaper_ready "$(deadline_after 2)" || log 'Wallpaper readiness unavailable during lock'
+    set_state transitioning lock
+    stage_lock_workspaces || log 'lock staging unavailable; lock continues'
+    "$session_sound" desktop-lock >/dev/null 2>&1 &
+    "$session_chrome" hide-start || log 'Noctalia session chrome exit unavailable during lock'
+    wait_lock_workspaces || log 'lock workspace wait unavailable; lock continues'
+    wallpaper_transition_start exit 3 && wallpaper_ok=1 || \
+        log 'Wallpaper exit unavailable; lock continues'
+    [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
+
+    for attempt in 1 2; do
+        "$hyprlock_bin"
+        hyprlock_status=$?
+        [ "$hyprlock_status" -eq 0 ] && break
+        [ "$attempt" -eq 1 ] && sleep 0.25
+    done
+
+    if [ "$hyprlock_status" -ne 0 ]; then
+        log 'Hyprlock failed twice; restoring interactive desktop'
+        restore_lock_workspaces || true
+        "$session_chrome" intro || true
+        set_state interactive hyprlock-failed
+        return 1
+    fi
+
+    run_unlock
+}
+
+run_terminal_action() {
+    local action="$1" dry_run="${2:-0}" wallpaper_ok=0
+    set_state preparing "$action"
+    if [ "$action" = logout ]; then
+        "$session_chrome" exit || log 'Noctalia session chrome exit unavailable'
+    fi
+    wait_wallpaper_ready "$(deadline_after 2)" || log "Wallpaper readiness unavailable during $action"
+    set_state transitioning "$action"
+    stage_workspaces || log 'terminal-action staging unavailable; action continues'
+    sleep "$visual_overlap_seconds"
+    wallpaper_transition_start exit 3 && wallpaper_ok=1 || \
+        log 'Wallpaper exit unavailable; terminal action continues'
+    [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
+
+    if [ "$dry_run" = 1 ]; then
+        restore_workspaces || true
+        [ "$action" = logout ] && "$session_chrome" intro || true
+        set_state interactive "dry-run wallpaper=$wallpaper_ok"
+        printf 'DRY_RUN_READY_BEFORE_SESSION_EXIT action=%s\n' "$action"
+        return 0
+    fi
+
+    if [ "$action" = logout ]; then
+        "$session_sound" desktop-logout || log 'logout sound unavailable'
+    fi
+
+    systemctl --user stop "$session_target" || log 'session target stop failed; loginctl still proceeds'
+    case "$action" in
+        logout)
+            if ! loginctl terminate-session "${XDG_SESSION_ID:?}"; then
+                "$session_chrome" intro || true
+                set_state interactive logout-failed
+                return 1
+            fi
+            ;;
+        restart) exec loginctl reboot ;;
+        shutdown) exec loginctl poweroff ;;
+    esac
+}
+
+main() {
+    local command="${1:-status}" dry_run=0
+    shift || true
+    case "$command" in
+        status) status; return 0 ;;
+        login) run_login; return $? ;;
+        lock) run_lock; return $? ;;
+        unlock) run_unlock; return $? ;;
+        logout|restart|shutdown)
+            [ "${1:-}" = --dry-run ] && dry_run=1
+            run_terminal_action "$command" "$dry_run"
+            return $? ;;
+        *)
+            printf 'usage: %s {status|login|lock|unlock|logout|restart|shutdown [--dry-run]}\n' "${0##*/}" >&2
+            return 2 ;;
+    esac
+}
+
+if [ "${1:-status}" = status ]; then
+    main "$@"
+    exit $?
+fi
+
+exec 9>"$lock_file"
+if ! flock -n 9; then
+    log 'another transition is already active'
+    exit 1
+fi
+main "$@"

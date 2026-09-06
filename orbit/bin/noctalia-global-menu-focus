@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Emit one focused Hyprland client JSON record, then exit."""
+
+import json
+import os
+import select
+import socket
+import subprocess
+import sys
+
+
+def active_window():
+    try:
+        result = subprocess.run(
+            ["hyprctl", "activewindow", "-j"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        value = json.loads(result.stdout)
+        monitors = subprocess.run(
+            ["hyprctl", "monitors", "-j"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        for monitor in json.loads(monitors.stdout):
+            if int(monitor.get("id", -1)) == int(value.get("monitor", -2)):
+                value["monitor"] = monitor.get("name", "")
+                break
+        return value
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--current":
+        value = active_window()
+        if value is not None:
+            print(json.dumps(value, separators=(",", ":")))
+        return
+
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    path = os.path.join(runtime, "hypr", signature, ".socket2.sock")
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.connect(path)
+            buffer = ""
+            saw_focus = False
+            while True:
+                if saw_focus:
+                    readable, _, _ = select.select([connection], [], [], 0.05)
+                    if not readable:
+                        value = active_window()
+                        if value is not None:
+                            print(json.dumps(value, separators=(",", ":")), flush=True)
+                        return
+
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return
+                buffer += chunk.decode(errors="replace")
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if line.startswith(("activewindow>>", "activewindowv2>>")):
+                        saw_focus = True
+    except OSError:
+        return
+
+
+if __name__ == "__main__":
+    main()

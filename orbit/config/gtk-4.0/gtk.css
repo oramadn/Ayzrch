@@ -1,0 +1,4 @@
+/* Noctalia supplies palette values; local files only change presentation. */
+@import url("noctalia.css");
+@import url("gtk4-presentation.css");
+@import url("shadow-overrides.css");

@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly SESSION_TARGET=hyprland-session.target
+readonly DESKTOP_PORTAL=xdg-desktop-portal.service
+readonly HYPRLAND_PORTAL=xdg-desktop-portal-hyprland.service
+readonly SESSION_ENVIRONMENT=(
+    PATH
+    WAYLAND_DISPLAY
+    HYPRLAND_INSTANCE_SIGNATURE
+    XDG_CURRENT_DESKTOP
+    XDG_SESSION_DESKTOP
+    XDG_SESSION_TYPE
+    XDG_SESSION_ID
+    XDG_RUNTIME_DIR
+    QT_QPA_PLATFORMTHEME
+)
+
+log() {
+    printf 'orbit-session-bootstrap: %s\n' "$*"
+}
+
+available_environment() {
+    local name
+    for name in "${SESSION_ENVIRONMENT[@]}"; do
+        [[ -n "${!name:-}" ]] && printf '%s\n' "$name"
+    done
+}
+
+import_session_environment() {
+    local name
+    for name in "${SESSION_ENVIRONMENT[@]}"; do
+        [[ -n "${!name:-}" ]] || {
+            printf 'orbit-session-bootstrap: required session variable is empty: %s\n' "$name" >&2
+            return 1
+        }
+    done
+
+    local -a available=()
+    mapfile -t available < <(available_environment)
+
+    dbus-update-activation-environment --systemd "${available[@]}"
+    systemctl --user import-environment "${available[@]}"
+}
+
+current_compositor_ready() {
+    local instances
+    instances="$(hyprctl instances -j 2>/dev/null)" || return 1
+    jq -e \
+        --arg signature "${HYPRLAND_INSTANCE_SIGNATURE:-}" \
+        --arg wayland "${WAYLAND_DISPLAY:-}" \
+        'any(.[]; .instance == $signature and .wl_socket == $wayland)' \
+        <<<"$instances" >/dev/null
+}
+
+wait_for_current_compositor() {
+    local attempt
+    [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -n "${WAYLAND_DISPLAY:-}" ]] || {
+        printf 'orbit-session-bootstrap: current Wayland session environment is incomplete\n' >&2
+        return 1
+    }
+
+    for ((attempt = 1; attempt <= 40; attempt++)); do
+        if current_compositor_ready; then
+            log "current compositor is ready (${HYPRLAND_INSTANCE_SIGNATURE})"
+            return 0
+        fi
+        sleep 0.25
+    done
+
+    printf 'orbit-session-bootstrap: compositor readiness timed out\n' >&2
+    return 1
+}
+
+configure_home_workspaces() {
+    "$HOME/.local/bin/orbit-home-workspaces"
+}
+
+portal_signature() {
+    local pid="$1" variable
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null |
+        while IFS= read -r variable; do
+            case "$variable" in
+                HYPRLAND_INSTANCE_SIGNATURE=*)
+                    printf '%s\n' "${variable#HYPRLAND_INSTANCE_SIGNATURE=}"
+                    return 0
+                    ;;
+            esac
+        done
+}
+
+portal_bound_to_current_compositor() {
+    local state pid signature
+    state="$(systemctl --user is-active "$HYPRLAND_PORTAL" 2>/dev/null || true)"
+    [[ "$state" == active ]] || return 1
+
+    pid="$(systemctl --user show --value --property=MainPID "$HYPRLAND_PORTAL")"
+    [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] || return 1
+    signature="$(portal_signature "$pid" || true)"
+    [[ "$signature" == "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
+}
+
+wait_for_portal_rebind() {
+    local attempt
+    for ((attempt = 1; attempt <= 20; attempt++)); do
+        if portal_bound_to_current_compositor; then
+            log "Hyprland portal is bound to the current compositor"
+            return 0
+        fi
+        sleep 0.25
+    done
+
+    printf 'orbit-session-bootstrap: Hyprland portal did not bind to the current compositor\n' >&2
+    return 1
+}
+
+bootstrap_orbit_appearance() {
+    local noctalia_source="$HOME/.config/hypr/noctalia.lua"
+    local terminal_source="$HOME/.config/wezterm/colors/Noctalia.toml"
+
+    # Noctalia exposes a synchronous template application command, so use it
+    # only when the source outputs are absent on a fresh session.
+    if [[ ! -f "$noctalia_source" || ! -f "$terminal_source" ]]; then
+        if ! noctalia msg templates-apply >/dev/null 2>&1; then
+            log "Noctalia templates are not ready; Orbit appearance is deferred"
+            return 0
+        fi
+    fi
+    if [[ ! -f "$noctalia_source" || ! -f "$terminal_source" ]]; then
+        log "Noctalia source outputs remain unavailable; Orbit appearance is deferred"
+        return 0
+    fi
+    if ! "$HOME/.local/bin/orbit-update-all-colors" noctalia; then
+        log "Orbit appearance adaptation failed; continuing with Noctalia outputs"
+    fi
+}
+
+for command in dbus-update-activation-environment hyprctl jq systemctl; do
+    command -v "$command" >/dev/null 2>&1 || {
+        printf 'orbit-session-bootstrap: required command not found: %s\n' "$command" >&2
+        exit 1
+    }
+done
+
+import_session_environment
+wait_for_current_compositor
+configure_home_workspaces
+systemctl --user start "$SESSION_TARGET"
+
+# Session choreography is owned by one coordinator. Visual failure must not
+# prevent portals and the rest of the graphical session from coming up.
+if ! "$HOME/.local/bin/orbit-session-transition" login; then
+    log "session transition failed; continuing with the usable desktop"
+fi
+
+bootstrap_orbit_appearance
+
+# A failed unit needs its start-limit state cleared before one deliberate
+# restart. No retry loop is used here; systemd remains the process owner.
+if systemctl --user is-failed --quiet "$HYPRLAND_PORTAL"; then
+    log "clearing the previous Hyprland portal failure state"
+    systemctl --user reset-failed "$HYPRLAND_PORTAL"
+fi
+if systemctl --user is-failed --quiet "$DESKTOP_PORTAL"; then
+    log "clearing the previous desktop portal failure state"
+    systemctl --user reset-failed "$DESKTOP_PORTAL"
+fi
+log "refreshing the desktop portal"
+systemctl --user restart "$DESKTOP_PORTAL"
+log "rebinding the Hyprland portal backend"
+systemctl --user restart "$HYPRLAND_PORTAL"
+wait_for_portal_rebind

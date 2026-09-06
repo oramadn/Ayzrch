@@ -1,0 +1,43 @@
+/* Keep GTK-rendered shadows inside the surface; Hyprland owns window shadows. */
+
+*:not(#orbit-shadow-exception) {
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}
+
+popover,
+popover.background,
+popover.menu,
+popover.context-menu {
+    background: @popover_bg_color;
+    background-color: @popover_bg_color;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+}
+
+popover > box,
+popover > box > box,
+popover > box > stack,
+popover > box > stack > box,
+popover > box > scrolledwindow,
+popover > box > scrolledwindow > viewport,
+popover > box > scrolledwindow > viewport > box {
+    background: @popover_bg_color;
+    background-color: @popover_bg_color;
+    background-image: none;
+    box-shadow: none;
+    outline: none;
+}
+
+popover > box modelbutton:not(:hover):not(:active):not(:checked):not(:focus) {
+    background-color: @popover_bg_color;
+}
+
+popover.menu,
+popover.menu > box {
+    border-radius: 12px;
+}

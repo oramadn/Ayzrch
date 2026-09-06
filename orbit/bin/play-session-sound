@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+case "${1:-}" in
+    desktop-login|desktop-lock|desktop-unlock|desktop-logout) ;;
+    *)
+        printf 'usage: %s {desktop-login|desktop-lock|desktop-unlock|desktop-logout}\n' "$0" >&2
+        exit 2
+        ;;
+esac
+
+command -v canberra-gtk-play >/dev/null 2>&1 || exit 0
+exec canberra-gtk-play --id="$1" --property="sound-theme-name=Orbit"

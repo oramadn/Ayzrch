@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly normal_socket_path="${XDG_RUNTIME_DIR:?}/gpu-screen-recorder-normal.sock"
+readonly replay_socket_path="${XDG_RUNTIME_DIR:?}/gpu-screen-recorder-replay.sock"
+readonly output_dir="${HOME}/Videos/ScreenCap"
+readonly replay_dir="${output_dir}/replays"
+readonly recording_dir="${output_dir}/recordings"
+readonly resolve_dir="${output_dir}/resolve"
+readonly monitor_resolver="${HOME}/.local/bin/orbit-monitor"
+
+gsr_cli() {
+    local socket="$1"
+    shift
+    gsr-cli -ipc "$socket" "$@"
+}
+
+convert_for_resolve() {
+    local input="$1" relative output
+    [[ -f "$input" ]] || return 0
+    command -v ffmpeg >/dev/null 2>&1 || {
+        printf 'ffmpeg is required to create Resolve-ready recordings.\n' >&2
+        return 1
+    }
+    relative="${input#"$output_dir"/}"
+    output="$resolve_dir/${relative%.mp4}.mov"
+    mkdir -p "${output%/*}"
+    ffmpeg -hide_banner -loglevel error -y -i "$input" \
+        -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p \
+        -c:a pcm_s16le -ar 48000 "$output"
+    printf 'Resolve-ready recording: %s\n' "$output"
+}
+
+normal_running() {
+    gsr_cli "$normal_socket_path" status >/dev/null 2>&1
+}
+
+replay_running() {
+    gsr_cli "$replay_socket_path" status >/dev/null 2>&1
+}
+
+choose_monitor() {
+    command -v zenity >/dev/null 2>&1 || {
+        printf 'zenity is required to choose a recording monitor.\n' >&2
+        return 1
+    }
+    hyprctl -j monitors | jq -r '.[].name' | zenity \
+        --list \
+        --title='Select recording monitor' \
+        --text='Choose the monitor to record:' \
+        --column='Monitor' \
+        --hide-header \
+        --height=220 \
+        --width=360
+}
+
+start_replay() {
+    local replay_monitor
+    replay_monitor="$("$monitor_resolver" instant-replay-monitor)" || exit 1
+    mkdir -p "$replay_dir" "$recording_dir"
+
+    setsid gpu-screen-recorder \
+        -w "$replay_monitor" \
+        -f 60 \
+        -a default_output \
+        -c mp4 \
+        -r 300 \
+        -restart-replay-on-save yes \
+        -o "$replay_dir" \
+        -ro "$recording_dir" \
+        -ipc "$replay_socket_path" \
+        </dev/null >>"$output_dir/gpu-screen-recorder.log" 2>&1 &
+
+    for _ in {1..30}; do
+        replay_running && return 0
+        sleep 0.1
+    done
+
+    printf 'GPU Screen Recorder did not start. See %s.\n' "$output_dir/gpu-screen-recorder.log" >&2
+    exit 1
+}
+
+start_recording() {
+    local monitor="$1"
+    local output_file
+    mkdir -p "$recording_dir"
+    output_file="$recording_dir/Video_$(date +%Y-%m-%d_%H-%M-%S).mp4"
+
+    setsid gpu-screen-recorder \
+        -w "$monitor" \
+        -f 60 \
+        -a default_output \
+        -c mp4 \
+        -o "$output_file" \
+        -ipc "$normal_socket_path" \
+        </dev/null >>"$output_dir/gpu-screen-recorder.log" 2>&1 &
+
+    for _ in {1..30}; do
+        normal_running && return 0
+        sleep 0.1
+    done
+
+    printf 'GPU Screen Recorder did not start. See %s.\n' "$output_dir/gpu-screen-recorder.log" >&2
+    exit 1
+}
+
+record() {
+    local monitor recording_path
+    if normal_running; then
+        recording_path="$(gsr_cli "$normal_socket_path" stop)"
+        convert_for_resolve "$recording_path"
+        return 0
+    fi
+    monitor="$(choose_monitor || true)"
+    [[ -n "$monitor" ]] || return 0
+    start_recording "$monitor"
+}
+
+case "${1:-}" in
+    record|toggle)
+        record
+        ;;
+    replay)
+        replay_running || start_replay
+        recording_path="$(gsr_cli "$replay_socket_path" save-replay 300)"
+        convert_for_resolve "$recording_path"
+        ;;
+    stop)
+        if normal_running; then
+            recording_path="$(gsr_cli "$normal_socket_path" stop)"
+            convert_for_resolve "$recording_path"
+        fi
+        ;;
+    start)
+        replay_running || start_replay
+        ;;
+    *)
+        printf 'Usage: %s {record|replay|stop|start}\n' "${0##*/}" >&2
+        exit 2
+        ;;
+esac

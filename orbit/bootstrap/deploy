@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+home_dir=${HOME:?HOME is required}
+optional=false
+[[ "${1:-}" == "--optional" ]] && optional=true
+[[ $# -le 1 ]] || { printf 'usage: %s [--optional]\n' "$0" >&2; exit 2; }
+
+link_owned() {
+    local source="$1" destination="$2"
+    mkdir -p "$(dirname "$destination")"
+    if [[ -L "$destination" ]]; then
+        [[ "$(readlink -f "$destination")" == "$(readlink -f "$source")" ]] || {
+            printf 'refusing to replace unrelated symlink: %s\n' "$destination" >&2
+            exit 1
+        }
+        return
+    fi
+    [[ ! -e "$destination" ]] || {
+        printf 'refusing to overwrite existing file: %s\n' "$destination" >&2
+        exit 1
+    }
+    ln -s "$source" "$destination"
+}
+
+seed_file() {
+    local source="$1" destination="$2"
+    mkdir -p "$(dirname "$destination")"
+    if [[ ! -e "$destination" ]]; then
+        install -m 0644 "$source" "$destination"
+    fi
+}
+
+verify_file() {
+    local source="$1" destination="$2"
+    [[ -f "$destination" ]] && cmp -s "$source" "$destination" || {
+        printf 'missing or incorrect deployed file: %s\n' "$destination" >&2
+        exit 1
+    }
+}
+
+install_sound_theme() {
+    local source="$repo_dir/assets/sounds/Orbit" destination="$home_dir/.local/share/sounds/Orbit"
+    mkdir -p "$destination/stereo"
+    if [[ ! -e "$destination/index.theme" ]]; then
+        install -m 0644 "$source/index.theme" "$destination/index.theme"
+    fi
+    for file in "$source/stereo"/*.wav; do
+        [[ -f "$file" ]] || continue
+        if [[ ! -e "$destination/stereo/$(basename "$file")" ]]; then
+            install -m 0644 "$file" "$destination/stereo/"
+        fi
+    done
+}
+
+link_config() {
+    local relative="$1"
+    link_owned "$repo_dir/config/$relative" "$home_dir/.config/$relative"
+}
+
+for relative in \
+    hypr/hyprland.lua hypr/hypridle.conf hypr/hyprlock.conf \
+    hypr/hyprtoolkit.conf hypr/appearance.toml \
+    hypr/scrolloverview.lua; do
+    link_config "$relative"
+done
+# orbit-theme rewrites these two in place from the Noctalia palette, so they are
+# generated outputs rather than Orbit-owned links. Seeding them keeps a rerun of
+# deploy from refusing on a live system that has already themed itself.
+seed_file "$repo_dir/config/hypr/hyprqt6engine.conf" "$home_dir/.config/hypr/hyprqt6engine.conf"
+for relative in "$repo_dir"/config/hypr/scripts/* "$repo_dir"/config/hypr/shaders/* "$repo_dir"/config/hypr/patches/*; do
+    [[ -f "$relative" ]] || continue
+    link_config "${relative#"$repo_dir"/config/}"
+done
+for relative in noctalia/90-orbit-glass.toml noctalia/hooks.toml \
+    noctalia/templates/wallpaper-palette.lua; do
+    link_config "$relative"
+done
+for relative in "$repo_dir"/config/quickshell/global-menu/*; do
+    [[ -f "$relative" ]] || continue
+    link_config "${relative#"$repo_dir"/config/}"
+done
+for relative in gtk-3.0/gtk.css \
+    gtk-3.0/gtk3-presentation.css gtk-3.0/shadow-overrides.css \
+    gtk-4.0/gtk.css gtk-4.0/gtk-dark.css \
+    gtk-4.0/shadow-overrides.css kitty/kitty.conf \
+    wezterm/orbit-about.lua zed/settings.json zed/themes/noctalia.json \
+    zen/orbit-userChrome.css; do
+    link_config "$relative"
+done
+
+seed_file "$repo_dir/config/wezterm/wezterm.lua" "$home_dir/.config/wezterm/wezterm.lua"
+seed_file "$repo_dir/config/qt6ct/qt6ct.conf" "$home_dir/.config/qt6ct/qt6ct.conf"
+seed_file "$repo_dir/desktop/orbit-wallpaper-engine-settings.desktop" \
+    "$home_dir/.local/share/applications/orbit-wallpaper-engine-settings.desktop"
+install_sound_theme
+
+for source in "$repo_dir/bin"/*; do
+    [[ -f "$source" ]] || continue
+    link_owned "$source" "$home_dir/.local/bin/$(basename "$source")"
+done
+for source in "$repo_dir/lib"/*; do
+    [[ -f "$source" ]] || continue
+    link_owned "$source" "$home_dir/.local/lib/$(basename "$source")"
+done
+for source in "$repo_dir/systemd/user"/*.service "$repo_dir/systemd/user"/*.timer "$repo_dir/systemd/user"/*.target; do
+    [[ -f "$source" ]] || continue
+    link_owned "$source" "$home_dir/.config/systemd/user/$(basename "$source")"
+done
+for directory in hypridle.service.d; do
+    for source in "$repo_dir/systemd/user/$directory"/*; do
+        [[ -f "$source" ]] || continue
+        link_owned "$source" "$home_dir/.config/systemd/user/$directory/$(basename "$source")"
+    done
+done
+
+if [[ "$optional" == true ]]; then
+    systemctl --user enable localsend.service
+fi
+systemctl --user daemon-reload
+systemctl --user enable orbit-wallpaper-engine.service workspace-alt-tab-input.service \
+    workspace-alt-tab-release.service new-workspace-apps.service \
+    window-shader-events.service hypridle.service hyprpolkitagent.service
+
+command -v noctalia >/dev/null 2>&1 || {
+    printf 'Noctalia is required before generated appearance outputs can be refreshed.\n' >&2
+    exit 1
+}
+noctalia msg templates-apply >/dev/null
+"$home_dir/.local/bin/orbit-update-all-colors" noctalia
+printf 'Orbit source deployment prepared from %s\n' "$repo_dir"

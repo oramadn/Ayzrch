@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Explicit, bounded adoption and rollback for the known-good Orbit install.
+
+Normal deployment intentionally remains refusal-only. This command is the
+only path that can adopt existing files, and it never replaces directories.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import stat
+import sys
+import time
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+HOME = Path(os.environ.get("HOME", "")).expanduser()
+STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "orbit/migrations"
+EXCLUDED_CONFIG = {"zen"}
+GENERATED_CONFIG = {"hypr/hyprqt6engine.conf", "wezterm/wezterm.lua"}
+EXCLUDED_BIN = {
+    "configure-localsend", "configure-zen", "gpu-screen-recorder-control",
+    "show-localsend",
+}
+EXCLUDED_UNITS = {"localsend.service"}
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def authored_entries():
+    entries = []
+
+    def add(source: Path, destination: Path, kind="link"):
+        if not source.is_file() or source.name == "qt6ct.conf" and kind == "link":
+            raise RuntimeError(f"missing or invalid authored source: {source}")
+        entries.append({"source": source, "destination": destination, "kind": kind})
+
+    for source in sorted((REPO / "config").rglob("*")):
+        relative = source.relative_to(REPO / "config")
+        if not source.is_file() or relative.parts[0] in EXCLUDED_CONFIG or relative.as_posix() in GENERATED_CONFIG or relative.as_posix() == "qt6ct/qt6ct.conf" or (relative.parts[0] == "hypr" and len(relative.parts) > 1 and relative.parts[1] in {"scripts", "shaders", "patches"}):
+            continue
+        add(source, HOME / ".config" / relative)
+    for root in (REPO / "config/hypr/scripts", REPO / "config/hypr/shaders", REPO / "config/hypr/patches"):
+        for source in sorted(root.rglob("*")):
+            if source.is_file():
+                add(source, HOME / ".config" / source.relative_to(REPO / "config"))
+    for source in sorted((REPO / "bin").iterdir()):
+        if source.is_file() and source.name not in EXCLUDED_BIN and "__pycache__" not in source.parts:
+            add(source, HOME / ".local/bin" / source.name)
+    for source in sorted((REPO / "lib").iterdir()):
+        if source.is_file():
+            add(source, HOME / ".local/lib" / source.name)
+    unit_root = REPO / "systemd/user"
+    for source in sorted(unit_root.rglob("*")):
+        if not source.is_file() or source.name in EXCLUDED_UNITS:
+            continue
+        add(source, HOME / ".config/systemd/user" / source.relative_to(unit_root))
+
+    # qt6ct is a copy-once seed, not a symlink-owned file. Sound assets are
+    # installed by bootstrap/deploy and are intentionally outside adoption.
+    add(REPO / "config/qt6ct/qt6ct.conf", HOME / ".config/qt6ct/qt6ct.conf", "seed")
+    return sorted(entries, key=lambda item: str(item["destination"]))
+
+
+def approved_difference(entry, current: Path) -> str | None:
+    relative = entry["source"].relative_to(REPO).as_posix()
+    text = current.read_text(errors="replace")
+    target = entry["source"].read_text(errors="replace")
+    if relative == "config/hypr/hyprland.lua":
+        if text.count('monitor = "') >= 2 and "/.local/opt/quickshell/bin/quickshell" in text:
+            if "ORBIT_QUICKSHELL" in target and "orbit-home-workspaces" not in text:
+                return "approved portability difference: dynamic QuickShell and runtime Home workspaces"
+    if relative == "bin/noctalia-global-menu" and str(HOME / ".local/bin") in text and 'os.environ.get("HOME"' in target:
+        return "approved portability difference: HOME-derived helper paths"
+    if relative == "bin/orbit-session-bootstrap" and "configure_home_workspaces" in target and "configure_home_workspaces" not in text:
+        return "approved semantic addition: runtime Home-workspace configuration"
+    if relative in {"config/gtk-3.0/shadow-overrides.css", "config/gtk-4.0/shadow-overrides.css"} and "-shadow-exception" in text and "orbit-shadow-exception" in target:
+        return "approved portability difference: neutralized selector identity"
+    if relative == "bin/workspace-alt-tab" and "persistent\") or rule.get(\"default\")" in text and 'is True' in target:
+        return "approved semantic correction: temporary rules excluded"
+    return None
+
+
+def classify(entry):
+    source, destination, kind = entry["source"], entry["destination"], entry["kind"]
+    target_hash = sha256(source)
+    if not destination.exists() and not destination.is_symlink():
+        return {"classification": "ABSENT", "action": "CREATE_LINK" if kind == "link" else "SEED" , "current_hash": "-", "target_hash": target_hash}
+    if destination.is_dir() and not destination.is_symlink():
+        return {"classification": "DIRECTORY", "action": "BLOCK", "current_hash": "-", "target_hash": target_hash}
+    if destination.is_symlink():
+        if destination.resolve() == source.resolve():
+            return {"classification": "ALREADY_ADOPTED", "action": "NOOP", "current_hash": sha256(destination.resolve()), "target_hash": target_hash}
+        return {"classification": "UNRELATED_SYMLINK", "action": "BLOCK", "current_hash": "-", "target_hash": target_hash}
+    current_hash = sha256(destination)
+    if current_hash == target_hash:
+        return {"classification": "IDENTICAL", "action": "ADOPT" if kind == "link" else "LEAVE_SEED", "current_hash": current_hash, "target_hash": target_hash}
+    approved = approved_difference(entry, destination)
+    if approved:
+        return {"classification": approved, "action": "ADOPT" if kind == "link" else "LEAVE_SEED", "current_hash": current_hash, "target_hash": target_hash}
+    return {"classification": "UNEXPECTED_CONTENT", "action": "BLOCK", "current_hash": current_hash, "target_hash": target_hash}
+
+
+def report_and_preflight():
+    entries = authored_entries()
+    rows = []
+    blocked = []
+    print("source -> live destination -> current hash -> target hash -> classification -> action")
+    for entry in entries:
+        result = classify(entry)
+        row = {**{key: str(value) for key, value in entry.items()}, **result}
+        rows.append(row)
+        print(f"{entry['source'].relative_to(REPO)} -> {entry['destination']} -> {result['current_hash']} -> {result['target_hash']} -> {result['classification']} -> {result['action']}")
+        if result["action"] == "BLOCK":
+            blocked.append(row)
+    return entries, rows, blocked
+
+
+def snapshot_path(root: Path, index: int, destination: Path) -> Path:
+    return root / "files" / f"{index:04d}-{destination.name}"
+
+
+def adopt(entries, rows):
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    root = STATE / timestamp
+    root.mkdir(parents=True, exist_ok=False)
+    manifest = {"version": 1, "repo": str(REPO), "snapshot": str(root), "entries": []}
+    for index, (entry, row) in enumerate(zip(entries, rows)):
+        destination = entry["destination"]
+        mutates = entry["kind"] == "link" or not (destination.exists() or destination.is_symlink())
+        manifest["entries"].append({
+            **row,
+            "source": str(entry["source"]),
+            "destination": str(destination),
+            "kind": entry["kind"],
+            "pre_exists": destination.exists() or destination.is_symlink(),
+            "snapshot": str(snapshot_path(root, index, destination)) if mutates and (destination.exists() or destination.is_symlink()) else "",
+            "mutates": mutates,
+            "completed": False,
+        })
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    try:
+        for index, (entry, row) in enumerate(zip(entries, rows)):
+            destination = entry["destination"]
+            record = manifest["entries"][index]
+            if not record["mutates"]:
+                record["completed"] = True
+                (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+                continue
+            if record["pre_exists"]:
+                snapshot = snapshot_path(root, index, destination)
+                snapshot.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(destination, snapshot)
+            if entry["kind"] == "link":
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(entry["source"], destination)
+            elif not record["pre_exists"]:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(entry["source"], destination)
+            if entry["kind"] == "link" and destination.resolve() != entry["source"].resolve():
+                raise RuntimeError(f"post-adoption target mismatch: {destination}")
+            if entry["kind"] == "link" and sha256(destination.resolve()) != row["target_hash"]:
+                raise RuntimeError(f"post-adoption hash mismatch: {destination}")
+            record["completed"] = True
+            (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    except Exception:
+        print(f"adoption failed; use rollback manifest: {root / 'manifest.json'}", file=sys.stderr)
+        raise
+    print(f"manifest: {root / 'manifest.json'}")
+
+
+def rollback(path: Path):
+    manifest = json.loads(path.read_text())
+    entries = [item for item in manifest["entries"] if item.get("completed")]
+    for item in entries:
+        destination = Path(item["destination"])
+        if not item.get("mutates"):
+            continue
+        if item.get("kind") == "link" and not destination.is_symlink():
+            relative = Path(item["source"]).relative_to(REPO).as_posix()
+            if relative not in GENERATED_CONFIG or sha256(destination) != item["target_hash"]:
+                raise RuntimeError(f"rollback refused unexpected destination: {destination}")
+        elif item.get("kind") == "link" and destination.resolve() != Path(item["source"]).resolve():
+            raise RuntimeError(f"rollback refused unexpected destination: {destination}")
+    for item in reversed(entries):
+        destination = Path(item["destination"])
+        destination.unlink()
+        if item.get("pre_exists"):
+            os.replace(item["snapshot"], destination)
+            if not destination.is_symlink() and sha256(destination) != item["current_hash"]:
+                raise RuntimeError(f"rollback hash mismatch: {destination}")
+    print(f"rolled back {len(entries)} adopted entries")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--adopt", action="store_true")
+    mode.add_argument("--rollback", type=Path)
+    args = parser.parse_args()
+    if args.rollback:
+        rollback(args.rollback)
+        return
+    entries, rows, blocked = report_and_preflight()
+    if blocked:
+        print(f"BLOCKED: {len(blocked)} unexpected destination(s)")
+        raise SystemExit(1)
+    print("READY FOR ADOPTION")
+    if args.adopt:
+        adopt(entries, rows)
+    elif not args.dry_run:
+        print("No mutation requested; use --dry-run or --adopt")
+
+
+if __name__ == "__main__":
+    main()

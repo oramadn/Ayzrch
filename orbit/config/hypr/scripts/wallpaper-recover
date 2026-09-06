@@ -1,0 +1,52 @@
+#!/bin/sh
+# Recover the Wallpaper Engine after a session lock.
+#
+# A session lock destroys the renderer's layer surfaces. It recreates them and
+# logs "layer surface ready" for each, but its intro-time recovery still reports
+# "intro surface recovery failed" and settles at fewer surfaces than outputs,
+# leaving those monitors black. Re-issuing an intro does not clear it — the
+# renderer repeats the same failed recovery — so restart it instead.
+#
+# Runs from hypridle's unlock_cmd, and does nothing when every surface is intact.
+
+set -eu
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/orbit-wallpaper-engine"
+status="$cache/status"
+
+complete() {
+    [ -f "$status" ] || return 1
+    surfaces="$(sed -n 's/^surfaces=//p' "$status" 2>/dev/null || true)"
+    [ -n "$surfaces" ] || return 1
+    [ "${surfaces%%/*}" = "${surfaces#*/}" ]
+}
+
+# The renderer reports the outcome of its own recovery about a second after the
+# unlock, so poll rather than sleeping a fixed interval: a healthy renderer
+# returns immediately and a broken one is caught as early as possible.
+attempt=0
+while [ "$attempt" -lt 15 ]; do
+    complete && exit 0
+    attempt=$((attempt + 1))
+    sleep 0.2
+done
+
+[ -n "${surfaces:-}" ] || exit 0
+have="${surfaces%%/*}"
+want="${surfaces#*/}"
+
+printf 'wallpaper-recover: %s of %s surfaces after unlock; restarting renderer\n' \
+    "$have" "$want" >&2
+systemctl --user restart orbit-wallpaper-engine.service || exit 0
+
+# The unit starts the renderer hidden, so reveal it once it is ready again.
+attempt=0
+while [ "$attempt" -lt 40 ]; do
+    if [ -f "$status" ] && grep -q '^readiness=ready' "$status"; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.25
+done
+
+"$HOME/.local/bin/orbit-wallpaper-control" intro >/dev/null 2>&1 || true

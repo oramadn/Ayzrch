@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+home_dir=${HOME:?HOME is required}
+source_only=false
+if [[ "${1:-}" == "--source" ]]; then
+    source_only=true
+elif [[ $# -gt 0 ]]; then
+    printf 'usage: %s [--source]\n' "$0" >&2
+    exit 2
+fi
+
+check_link() {
+    local source="$1" destination="$2"
+    [[ -L "$destination" && "$(readlink -f "$destination")" == "$(readlink -f "$source")" ]] || {
+        printf 'missing or incorrect deployment link: %s\n' "$destination" >&2
+        return 1
+    }
+}
+
+check_file() {
+    local source="$1" destination="$2"
+    [[ -f "$destination" ]] && cmp -s "$source" "$destination" || {
+        printf 'missing or incorrect deployed file: %s\n' "$destination" >&2
+        return 1
+    }
+}
+
+if [[ "$source_only" == false ]]; then
+    for relative in hypr/hyprland.lua hypr/hypridle.conf hypr/hyprlock.conf \
+        hypr/hyprtoolkit.conf hypr/appearance.toml \
+        noctalia/90-orbit-glass.toml noctalia/hooks.toml \
+        quickshell/global-menu/shell.qml kitty/kitty.conf; do
+        check_link "$repo_dir/config/$relative" "$home_dir/.config/$relative"
+    done
+    check_file "$repo_dir/desktop/orbit-wallpaper-engine-settings.desktop" \
+        "$home_dir/.local/share/applications/orbit-wallpaper-engine-settings.desktop"
+    for source in "$repo_dir/bin"/*; do
+        [[ -f "$source" ]] || continue
+        case "$(basename "$source")" in
+            configure-localsend|configure-zen|gpu-screen-recorder-control|show-localsend)
+                continue
+                ;;
+        esac
+        check_link "$source" "$home_dir/.local/bin/$(basename "$source")"
+    done
+fi
+
+python3 - "$repo_dir" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in root.rglob("*.py"):
+    compile(path.read_text(), str(path), "exec")
+PY
+
+for script in "$repo_dir/bin"/* "$repo_dir/bootstrap"/* "$repo_dir/config/hypr/scripts"/*; do
+    [[ -f "$script" ]] || continue
+    first_line=''
+    IFS= read -r first_line < "$script" || true
+    case "$first_line" in
+        '#!'*'/bash'|'#!'*'/sh') bash -n "$script" ;;
+    esac
+done
+
+if [[ "$source_only" == true ]]; then
+    printf 'Orbit source validation is valid.\n'
+else
+    printf 'Orbit source and deployment links are valid.\n'
+fi

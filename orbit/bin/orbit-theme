@@ -1,0 +1,991 @@
+#!/usr/bin/env python3
+"""Adapt Noctalia's active palette into Orbit toolkit artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+
+HOME = Path.home()
+XCURSOR_FALLBACK_THEME = "Adwaita"
+sys.path.insert(0, str(HOME / ".local/lib"))
+from orbit_settings_shape import derived_shape_tokens, normalise_shape  # noqa: E402
+from orbit_transparency_defaults import DEFAULT_SURFACE_OPACITIES  # noqa: E402
+
+ORBIT = Path.home() / ".config/orbit"
+APPEARANCE_SOURCE = HOME / ".config/hypr/appearance.toml"
+NOCTALIA_SOURCE = HOME / ".config/hypr/noctalia.lua"
+NOCTALIA_TERMINAL_SOURCE = HOME / ".config/wezterm/colors/Noctalia.toml"
+GENERATED = ORBIT / "generated"
+GTK3_ACTIVE = Path.home() / ".config/gtk-3.0/orbit.css"
+GTK4_ACTIVE = Path.home() / ".config/gtk-4.0/orbit.css"
+KITTY_ACTIVE = Path.home() / ".config/kitty/themes/orbit.conf"
+WEZTERM_CONFIG_ACTIVE = Path.home() / ".config/wezterm/wezterm.lua"
+GTK3_SHAPE_ACTIVE = HOME / ".config/gtk-3.0/orbit-shape.css"
+GTK4_SHAPE_ACTIVE = HOME / ".config/gtk-4.0/orbit-shape.css"
+HYPRQT6ENGINE_DEFAULTS = {
+    "theme": {
+        "color_scheme": "",
+        "icon_theme": "",
+        "font_fixed": "JetBrains Mono",
+        "font_fixed_size": "10.0",
+        "font": "JetBrains Mono",
+        "font_size": "10.0",
+    },
+    "misc": {
+        "single_click_activate": "1",
+        "menus_have_icons": "1",
+        "shortcuts_for_context_menus": "1",
+    },
+}
+HYPRQT6ENGINE_GROUP = re.compile(r"^\s*(theme|misc)\s*\{\s*$")
+HYPRQT6ENGINE_ASSIGNMENT = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+SURFACE_OPACITY_DEFAULTS = DEFAULT_SURFACE_OPACITIES
+DEFAULT_TYPOGRAPHY = {
+    "display": {"family": "JetBrains Mono", "size": 10.0},
+    "body": {"family": "JetBrains Mono", "size": 10.0},
+    "monospace": {"family": "JetBrains Mono", "size": 10.0},
+}
+DEFAULT_RESOURCES = {
+    "icons": {"theme": "kora"},
+    "cursor": {"theme": "default", "size": 24},
+}
+
+
+def read_toml(path: Path) -> dict:
+    with path.open("rb") as stream:
+        return tomllib.load(stream)
+
+
+def selected_palette() -> str:
+    return "noctalia"
+
+
+def load_palette(name: str) -> tuple[str, dict, dict]:
+    if name not in ("noctalia", "noctalia.lua"):
+        raise SystemExit("Orbit accepts only the active Noctalia palette")
+    try:
+        source = NOCTALIA_SOURCE.read_text()
+    except OSError as error:
+        raise SystemExit(f"Noctalia palette output is unavailable: {NOCTALIA_SOURCE}") from error
+    raw = dict(re.findall(r'^local (primary|surface|on_surface|secondary|on_secondary|error|on_error|shadow) = "rgb\(([0-9a-fA-F]{6})\)"$', source, re.MULTILINE))
+    required = {"primary", "surface", "on_surface", "secondary", "on_secondary", "error", "on_error"}
+    missing = sorted(required - set(raw))
+    if missing:
+        raise SystemExit(f"Noctalia palette output is incomplete: {NOCTALIA_SOURCE} (missing {', '.join(missing)})")
+    raw = {key: f"#{value.lower()}" for key, value in raw.items()}
+    # Noctalia's Hyprland template stopped emitting the `shadow` role after
+    # 5.0.0-beta.9, the release Orbit was validated against. It only fed the
+    # background_deep colour, for which surface is the right fallback.
+    raw.setdefault("shadow", raw["surface"])
+    try:
+        terminal = read_toml(NOCTALIA_TERMINAL_SOURCE)["colors"]
+        ansi = terminal["ansi"]
+        brights = terminal["brights"]
+    except (OSError, KeyError, TypeError):
+        raise SystemExit(f"Noctalia terminal palette output is unavailable: {NOCTALIA_TERMINAL_SOURCE}")
+    colors = {
+        "background": raw["surface"], "background_deep": raw["shadow"],
+        "surface": raw["surface"], "surface_elevated": raw["surface"],
+        "surface_selected": terminal["selection_bg"], "surface_highlight": terminal["split"],
+        "selection": terminal["selection_bg"], "editor": raw["surface"],
+        "border": terminal["split"], "border_strong": raw["primary"],
+        "split": terminal["split"], "muted": ansi[7],
+        "text": raw["on_surface"], "text_muted": brights[7],
+        "accent": raw["primary"], "accent_secondary": raw["secondary"],
+        "accent_deep": ansi[4], "red": ansi[1], "green": ansi[2],
+        "yellow": ansi[3], "orange": ansi[3], "cyan": ansi[6],
+        "cyan_muted": ansi[6], "ansi_black": ansi[0],
+        "ansi_white": ansi[7], "accent_foreground": raw["on_secondary"],
+        "gradients": {"cava": [raw["primary"], raw["secondary"], raw["error"]],
+                       "horizontal_cava": [raw["error"], raw["secondary"], raw["primary"]]},
+    }
+    return "noctalia", {"name": "Noctalia"}, colors
+
+
+def rgb(value: str) -> str:
+    return f"rgb({value[1:]})"
+
+
+def typography_settings() -> dict:
+    configured = {}
+    try:
+        configured = read_toml(APPEARANCE_SOURCE).get("typography", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        pass
+    result = {}
+    for role, fallback in DEFAULT_TYPOGRAPHY.items():
+        item = configured.get(role, {}) if isinstance(configured, dict) else {}
+        family = str(item.get("family", fallback["family"])).strip()
+        try:
+            size = float(item.get("size", fallback["size"]))
+        except (TypeError, ValueError):
+            size = fallback["size"]
+        result[role] = {"family": family or fallback["family"], "size": size if math.isfinite(size) and size > 0 else fallback["size"]}
+    return result
+
+
+def resource_settings() -> dict:
+    try:
+        appearance = read_toml(APPEARANCE_SOURCE)
+    except (OSError, tomllib.TOMLDecodeError):
+        appearance = {}
+    icons = appearance.get("icons", {})
+    cursor = appearance.get("cursor", {})
+    try:
+        cursor_size = int(cursor.get("size", DEFAULT_RESOURCES["cursor"]["size"]))
+    except (TypeError, ValueError):
+        cursor_size = DEFAULT_RESOURCES["cursor"]["size"]
+    return {
+        "icons": {"theme": str(icons.get("theme", DEFAULT_RESOURCES["icons"]["theme"])).strip() or DEFAULT_RESOURCES["icons"]["theme"]},
+        "cursor": {"theme": str(cursor.get("theme", DEFAULT_RESOURCES["cursor"]["theme"])).strip() or DEFAULT_RESOURCES["cursor"]["theme"], "size": cursor_size},
+    }
+
+
+def css_family(family: str) -> str:
+    return '"' + family.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def semantic(colors: dict) -> dict:
+    return {
+        "window_background": colors["background"],
+        "background_deep": colors["background_deep"],
+        "surface": colors["surface"],
+        "surface_elevated": colors["surface_elevated"],
+        "surface_selected": colors["surface_selected"],
+        "surface_highlight": colors["surface_highlight"],
+        "selection": colors["selection"],
+        "editor": colors["editor"],
+        "border": colors["border"],
+        "border_strong": colors["border_strong"],
+        "split": colors["split"],
+        "muted": colors["muted"],
+        "text": colors["text"],
+        "text_muted": colors["text_muted"],
+        "accent": colors["accent"],
+        "accent_secondary": colors["accent_secondary"],
+        "accent_deep": colors["accent_deep"],
+        "error": colors["red"],
+        "success": colors["green"],
+        "warning": colors["yellow"],
+        "orange": colors["orange"],
+        "cyan": colors["cyan"],
+        "cyan_muted": colors["cyan_muted"],
+        "accent_foreground": colors["accent_foreground"],
+    }
+
+
+def surface_opacities() -> dict[str, float]:
+    try:
+        appearance = json.loads((ORBIT / "generated/appearance.json").read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        appearance = {}
+    surfaces = appearance.get("transparency", {}).get("surfaces", {}) if isinstance(appearance, dict) else {}
+    result = {}
+    for name, fallback in SURFACE_OPACITY_DEFAULTS.items():
+        try:
+            value = float(surfaces.get(name, fallback))
+        except (TypeError, ValueError):
+            value = fallback
+        result[name] = max(0.0, min(1.0, value)) if math.isfinite(value) else fallback
+    return result
+
+
+def shape_settings() -> dict:
+    try:
+        appearance = json.loads((ORBIT / "generated/appearance.json").read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        appearance = {}
+    shape = appearance.get("shape") if isinstance(appearance, dict) else None
+    if not isinstance(shape, dict):
+        try:
+            shape = read_toml(APPEARANCE_SOURCE).get("shape", {})
+        except (OSError, tomllib.TOMLDecodeError):
+            shape = {}
+    return normalise_shape(shape)
+
+
+def gtk_shape_css(gtk_version: int, shape: dict) -> str:
+    tokens = derived_shape_tokens(shape)
+    control_radius = tokens["control_radius"]
+    button_shape = shape["button_shape"]
+    button_radius = (
+        "0px"
+        if button_shape == "square"
+        else "9999px"
+        if button_shape == "pill"
+        else f"{control_radius}px"
+    )
+    if gtk_version == 3:
+        selectors = [
+            "button:not(.flat):not(.circular)",
+            "entry",
+            "spinbutton > entry",
+            "combobox > box",
+        ]
+        popup = "popover.menu, popover.menu > box"
+        card = ".card"
+    else:
+        selectors = [
+            "button:not(.flat):not(.circular)",
+            "entry",
+            "spinbutton",
+            "dropdown > button",
+            "combobox > button",
+        ]
+        popup = ",\n".join([
+            "popover.menu > contents",
+            "popover.context-menu > contents",
+            "headerbar popover.menu > contents",
+            ".nautilus-toolbar popover.menu > contents",
+        ])
+        card = ".card"
+    lines = [
+        "/* Generated by orbit-theme. Do not edit manually. */",
+        ",\n".join(selectors) + " {",
+        f"    border-radius: {button_radius};",
+        "}",
+        "",
+        f"{card} {{",
+        f"    border-radius: {tokens['surface_radius']}px;",
+        "}",
+        "",
+        f"{popup} {{",
+        f"    border-radius: {tokens['popup_radius']}px;",
+        "}",
+    ]
+    if gtk_version == 4:
+        lines.extend([
+            "",
+            "/* Preserve Nautilus navigation popover workarounds. */",
+            ".nautilus-pathbar > menubutton > popover > contents,",
+            "placessidebar popover > contents,",
+            ".navigation-sidebar popover > contents {",
+            "    border-radius: 0;",
+            "}",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def write_shape_artifacts(output: Path, shape: dict | None = None) -> None:
+    shape = shape or shape_settings()
+    write_atomic(output / "gtk-3.0-shape.css", gtk_shape_css(3, shape))
+    write_atomic(output / "gtk-4.0-shape.css", gtk_shape_css(4, shape))
+
+
+def install_active_shape_adapters(palette_name: str, shape: dict | None = None) -> None:
+    generated = GENERATED / palette_name
+    shape = shape or shape_settings()
+    write_shape_artifacts(generated, shape)
+    write_atomic(GTK3_SHAPE_ACTIVE, (generated / "gtk-3.0-shape.css").read_text())
+    write_atomic(GTK4_SHAPE_ACTIVE, (generated / "gtk-4.0-shape.css").read_text())
+
+
+def rgba(color: str, opacity: float) -> str:
+    channels = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+    return f"rgba({channels[0]}, {channels[1]}, {channels[2]}, {opacity:.12f})"
+
+
+def gtk_css(values: dict, headerbar: str, opacities: dict[str, float], typography: dict) -> str:
+    window_background = rgba(values["window_background"], opacities["window_background"])
+    menu = rgba(values["surface"], opacities["menu"])
+    sidebar = rgba(values["surface"], opacities["sidebar"])
+    secondary_sidebar = rgba(values["window_background"], opacities["sidebar"])
+    header = rgba(headerbar, opacities["header"])
+    lines = [
+        "/* Generated by orbit-theme. Do not edit manually. */",
+        f"@define-color accent_color {values['accent']};",
+        f"@define-color accent_bg_color {values['accent']};",
+        f"@define-color accent_fg_color {values['accent_foreground']};",
+        f"@define-color destructive_bg_color {values['error']};",
+        f"@define-color destructive_fg_color {values['accent_foreground']};",
+        f"@define-color error_bg_color {values['error']};",
+        f"@define-color error_fg_color {values['accent_foreground']};",
+        f"@define-color orbit_window_background {window_background};",
+        f"@define-color orbit_menu {menu};",
+        f"@define-color orbit_sidebar {sidebar};",
+        f"@define-color orbit_secondary_sidebar {secondary_sidebar};",
+        f"@define-color orbit_header {header};",
+        "@define-color window_bg_color @orbit_window_background;",
+        f"@define-color window_fg_color {values['text']};",
+        "@define-color view_bg_color @orbit_window_background;",
+        f"@define-color view_fg_color {values['text']};",
+        "@define-color headerbar_bg_color @orbit_header;",
+        f"@define-color headerbar_fg_color {values['text']};",
+        "@define-color headerbar_backdrop_color @orbit_header;",
+        "@define-color popover_bg_color @orbit_menu;",
+        f"@define-color popover_fg_color {values['text']};",
+        "@define-color card_bg_color @orbit_menu;",
+        f"@define-color card_fg_color {values['text']};",
+        "@define-color dialog_bg_color @orbit_window_background;",
+        f"@define-color dialog_fg_color {values['text']};",
+        "@define-color sidebar_bg_color @orbit_sidebar;",
+        f"@define-color sidebar_fg_color {values['text']};",
+        "@define-color secondary_sidebar_bg_color @orbit_secondary_sidebar;",
+        f"@define-color secondary_sidebar_fg_color {values['text']};",
+        f"@define-color overview_bg_color {values['surface']};",
+        f"@define-color overview_fg_color {values['text']};",
+        "@define-color theme_selected_bg_color @accent_bg_color;",
+        "@define-color theme_selected_fg_color @accent_fg_color;",
+        "@define-color theme_unfocused_fg_color @window_fg_color;",
+        "@define-color theme_unfocused_text_color @view_fg_color;",
+        "@define-color theme_unfocused_bg_color @window_bg_color;",
+        "@define-color theme_unfocused_base_color @window_bg_color;",
+        "@define-color theme_unfocused_selected_bg_color @accent_bg_color;",
+        "@define-color theme_unfocused_selected_fg_color @accent_fg_color;",
+        ".card.info,",
+        ".card.info:backdrop,",
+        ".card.warning,",
+        ".card.warning:backdrop {",
+        "    background-color: @orbit_menu;",
+        "}",
+        ".card.category-tile:not(:hover):not(:active):not(:checked):not(:focus):not(:disabled):not(:selected) {",
+        "    background-color: @orbit_menu;",
+        "    background-image: none;",
+        "}",
+        "",
+        "/* PARTIAL Display adapter: GTK's native global font remains Body. */",
+        ".heading,",
+        "headerbar .title,",
+        "headerbar .subtitle,",
+         ".titlebar .title {",
+         f"    font-family: {css_family(typography['display']['family'])};",
+         f"    font-size: {float(typography['display']['size']):g}pt;",
+         "}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def kitty_conf(colors: dict, typography: dict) -> str:
+    ansi = [colors[key] for key in ("ansi_black", "red", "green", "yellow", "accent", "accent_secondary", "cyan", "ansi_white")]
+    bright = [colors["border_strong"], colors["red"], colors["green"], colors["yellow"], colors["accent"], colors["accent_secondary"], colors["cyan"], colors["text"]]
+    lines = ["# Generated by orbit-theme. Do not edit manually."]
+    lines += [f"color{index} {value}" for index, value in enumerate(ansi)]
+    lines += [f"color{index + 8} {value}" for index, value in enumerate(bright)]
+    lines += [
+        f"font_family {typography['monospace']['family']}",
+        f"font_size {float(typography['monospace']['size']):g}",
+        f"cursor {colors['text']}",
+        f"cursor_text_color {colors['background']}",
+        f"background {colors['background']}",
+        f"foreground {colors['text']}",
+        f"selection_foreground {colors['text']}",
+        f"selection_background {colors['selection']}",
+        f"active_border_color {colors['accent']}",
+        f"inactive_border_color {colors['border']}",
+        f"url_color {colors['cyan']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as stream:
+        stream.write(content)
+        temporary = Path(stream.name)
+    os.replace(temporary, path)
+
+
+def write_gtk_artifacts(
+    output: Path,
+    values: dict,
+    opacities: dict[str, float],
+    typography: dict | None = None,
+) -> None:
+    typography = typography or typography_settings()
+    write_atomic(output / "gtk-3.0.css", gtk_css(values, values["surface"], opacities, typography))
+    write_atomic(output / "gtk-4.0.css", gtk_css(values, values["window_background"], opacities, typography))
+
+
+def qfont_value(spec: dict) -> str:
+    family = str(spec["family"]).replace(",", " ")
+    size = f'{float(spec["size"]):g}'
+    return f"{family},{size},-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0"
+
+
+def update_ini_section(text: str, section: str, updates: dict[str, str]) -> str:
+    lines = text.splitlines()
+    output = []
+    current = None
+    seen = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped[1:-1]
+        if current == section and "=" in line and not stripped.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key in updates:
+                output.append(f"{key}={updates[key]}")
+                seen.add(key)
+                continue
+        output.append(line)
+
+    if not any(line.strip() == f"[{section}]" for line in output):
+        if output and output[-1].strip():
+            output.append("")
+        output.append(f"[{section}]")
+    section_index = next(index for index, line in enumerate(output) if line.strip() == f"[{section}]")
+    insert_at = section_index + 1
+    for key, value in updates.items():
+        if key not in seen:
+            output.insert(insert_at, f"{key}={value}")
+            insert_at += 1
+    return "\n".join(output).rstrip() + "\n"
+
+
+def kdeglobals_content(typography: dict, resources: dict | None = None) -> str:
+    source = HOME / ".config/kdeglobals"
+    try:
+        text = source.read_text()
+    except OSError:
+        text = ""
+    body = qfont_value(typography["body"])
+    display = qfont_value(typography["display"])
+    mono = qfont_value(typography["monospace"])
+    resources = resources or resource_settings()
+    text = update_ini_section(text, "General", {
+        "fixed": mono,
+        "font": body,
+        "menuFont": body,
+        "smallestReadableFont": body,
+        "toolBarFont": body,
+    })
+    text = update_ini_section(text, "Icons", {
+        "Theme": resources["icons"]["theme"],
+    })
+    return update_ini_section(text, "WM", {
+        "activeFont": display,
+        "inactiveFont": display,
+    })
+
+
+def trolltech_content(typography: dict) -> str:
+    source = HOME / ".config/Trolltech.conf"
+    try:
+        text = source.read_text()
+    except OSError:
+        text = ""
+    return update_ini_section(text, "qt", {"font": qfont_value(typography["body"])})
+
+
+def write_kde_compatibility_artifact(
+    output: Path, typography: dict, resources: dict | None = None
+) -> None:
+    write_atomic(output / "kdeglobals", kdeglobals_content(typography, resources))
+
+
+def write_trolltech_artifact(output: Path, typography: dict) -> None:
+    write_atomic(output / "Trolltech.conf", trolltech_content(typography))
+
+
+def hyprqt6engine_config(
+    typography: dict | None = None, resources: dict | None = None
+) -> str:
+    values = {group: defaults.copy() for group, defaults in HYPRQT6ENGINE_DEFAULTS.items()}
+    source = HOME / ".config/hypr/hyprqt6engine.conf"
+    if source.is_file():
+        group = None
+        for line in source.read_text().splitlines():
+            stripped = line.strip()
+            match = HYPRQT6ENGINE_GROUP.match(line)
+            if match:
+                group = match.group(1)
+                continue
+            if stripped == "}":
+                group = None
+                continue
+            if group not in values:
+                continue
+            assignment = HYPRQT6ENGINE_ASSIGNMENT.match(line)
+            if not assignment or assignment.group(1) not in values[group]:
+                continue
+            value = re.sub(r"\s+#.*$", "", assignment.group(2)).strip()
+            values[group][assignment.group(1)] = value
+
+    typography = typography or typography_settings()
+    resources = resources or resource_settings()
+    values["theme"].update({
+        "icon_theme": resources["icons"]["theme"],
+        "font_fixed": typography["monospace"]["family"],
+        "font_fixed_size": f'{float(typography["monospace"]["size"]):g}',
+        "font": typography["body"]["family"],
+        "font_size": f'{float(typography["body"]["size"]):g}',
+    })
+
+    lines = ["theme {"]
+    lines.extend(f"    {key} = {value}" for key, value in values["theme"].items())
+    lines.extend(["}", "", "misc {"])
+    lines.extend(f"    {key} = {value}" for key, value in values["misc"].items())
+    lines.extend(["}", ""])
+    return "\n".join(lines)
+
+
+def generate(name: str) -> Path:
+    palette_name, metadata, colors = load_palette(name)
+    values = semantic(colors)
+    typography = typography_settings()
+    output = GENERATED / palette_name
+    output.mkdir(parents=True, exist_ok=True)
+    write_atomic(
+        GENERATED / "appearance.json",
+        json.dumps(read_toml(APPEARANCE_SOURCE) | {"colors": {
+            "primary": rgb(colors["accent"]),
+            "secondary": rgb(colors["accent_secondary"]),
+            "surface": rgb(colors["background"]),
+            "error": rgb(colors["red"]),
+        }}, indent=2) + "\n",
+    )
+    write_atomic(output / "semantic.json", json.dumps({"palette": metadata, "colors": colors, "semantic": values}, indent=2) + "\n")
+    opacities = surface_opacities()
+    shape = shape_settings()
+    write_gtk_artifacts(output, values, opacities, typography)
+    write_shape_artifacts(output, shape)
+    write_atomic(output / "kitty.conf", kitty_conf(colors, typography))
+    print(output)
+    return output
+
+
+def refresh_typography(name: str) -> Path:
+    palette_name, _metadata, colors = load_palette(name)
+    values = semantic(colors)
+    typography = typography_settings()
+    output = GENERATED / palette_name
+    output.mkdir(parents=True, exist_ok=True)
+    opacities = surface_opacities()
+    write_gtk_artifacts(output, values, opacities, typography)
+    install_active_typography_adapters(palette_name, typography)
+    refresh_auxiliary_adapters(palette_name)
+    print(output)
+    return output
+
+
+def refresh_shape(name: str) -> Path:
+    palette_name, _metadata, _colors = load_palette(name)
+    output = GENERATED / palette_name
+    output.mkdir(parents=True, exist_ok=True)
+    install_active_shape_adapters(palette_name, shape_settings())
+    print(output)
+    return output
+
+
+def refresh_resources(name: str) -> Path:
+    palette_name, _metadata, colors = load_palette(name)
+    values = semantic(colors)
+    typography = typography_settings()
+    resources = resource_settings()
+    output = GENERATED / palette_name
+    output.mkdir(parents=True, exist_ok=True)
+    opacities = surface_opacities()
+    # Keep the generated GTK profile in lockstep with appearance.json;
+    # resource-only changes do not rewrite unrelated active typography files.
+    write_gtk_artifacts(output, values, opacities, typography)
+    install_active_resource_adapters(palette_name, resources)
+    print(output)
+    return output
+
+
+def refresh_gtk(name: str) -> Path:
+    """Compatibility entry point for the shared appearance refresh."""
+    return refresh_typography(name)
+
+
+def kde_scheme(values: dict) -> str:
+    def rgb(value: str) -> str:
+        return ",".join(str(int(value[index:index + 2], 16)) for index in (1, 3, 5))
+
+    background = rgb(values["window_background"])
+    surface = rgb(values["surface"])
+    elevated = rgb(values["surface_elevated"])
+    accent = rgb(values["accent"])
+    text = rgb(values["text"])
+    muted = rgb(values["text_muted"])
+    error = rgb(values["error"])
+    success = rgb(values["success"])
+    secondary = rgb(values["accent_secondary"])
+    selected_text = rgb(values["accent_foreground"])
+    return f'''[KDE]
+contrast=4
+
+[General]
+ColorScheme=Orbit
+Name=orbit
+
+[Colors:Button]
+BackgroundAlternate={rgb(values["background_deep"])}
+BackgroundNormal={surface}
+DecorationFocus={accent}
+DecorationHover={accent}
+ForegroundActive={accent}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[Colors:Complementary]
+BackgroundAlternate={rgb(values["editor"])}
+BackgroundNormal={background}
+DecorationFocus={accent}
+DecorationHover={accent}
+ForegroundActive={accent}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[Colors:Header]
+BackgroundAlternate={background}
+BackgroundNormal={surface}
+DecorationFocus={accent}
+DecorationHover={accent}
+ForegroundActive={accent}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[Colors:Selection]
+BackgroundAlternate={rgb(values["background_deep"])}
+BackgroundNormal={accent}
+DecorationFocus={accent}
+DecorationHover={accent}
+ForegroundActive={selected_text}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={selected_text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[Colors:View]
+BackgroundAlternate={surface}
+BackgroundNormal={background}
+DecorationFocus={rgb(values["border_strong"])}
+DecorationHover={selected_text}
+ForegroundActive={accent}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[Colors:Window]
+BackgroundAlternate={background}
+BackgroundNormal={surface}
+DecorationFocus={accent}
+DecorationHover={accent}
+ForegroundActive={accent}
+ForegroundInactive={muted}
+ForegroundLink={secondary}
+ForegroundNegative={error}
+ForegroundNeutral={success}
+ForegroundNormal={text}
+ForegroundPositive={success}
+ForegroundVisited={secondary}
+
+[WM]
+activeBackground={accent}
+activeBlend={text}
+activeForeground={text}
+inactiveBackground={background}
+inactiveBlend={muted}
+inactiveForeground={muted}
+'''
+
+
+def install_active_gtk(palette_name: str) -> None:
+    generated = GENERATED / palette_name
+    write_atomic(GTK3_ACTIVE, (generated / "gtk-3.0.css").read_text())
+    write_atomic(GTK4_ACTIVE, (generated / "gtk-4.0.css").read_text())
+
+
+def update_gtk_font_setting(path: Path, family: str, size: float) -> None:
+    try:
+        text = path.read_text()
+    except OSError:
+        text = "[Settings]\n"
+    value = f"{family} {size:g}"
+    lines = text.splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        if line.strip().startswith("gtk-font-name="):
+            lines[index] = f"gtk-font-name={value}"
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f"gtk-font-name={value}")
+    write_atomic(path, "\n".join(lines).rstrip() + "\n")
+
+
+def update_gtk_resource_settings(path: Path, resources: dict) -> None:
+    try:
+        text = path.read_text()
+    except OSError:
+        text = "[Settings]\n"
+    text = update_ini_section(text, "Settings", {
+        "gtk-icon-theme-name": resources["icons"]["theme"],
+        "gtk-cursor-theme-name": XCURSOR_FALLBACK_THEME,
+        "gtk-cursor-theme-size": str(resources["cursor"]["size"]),
+    })
+    write_atomic(path, text)
+
+
+def update_qt6ct_fonts(path: Path, typography: dict) -> None:
+    try:
+        text = path.read_text()
+    except OSError:
+        text = ""
+    text = update_ini_section(text, "Fonts", {
+        "fixed": f'"{qfont_value(typography["monospace"])}"',
+        "general": f'"{qfont_value(typography["body"])}"',
+    })
+    write_atomic(path, text)
+
+
+def update_qt6ct_resources(path: Path, resources: dict) -> None:
+    try:
+        text = path.read_text()
+    except OSError:
+        text = ""
+    text = update_ini_section(text, "Appearance", {
+        "icon_theme": resources["icons"]["theme"],
+    })
+    write_atomic(path, text)
+
+
+def update_gnome_font_settings(typography: dict) -> None:
+    # GSettings is the native GNOME/GTK preference path. Never touch it during
+    # disposable generator tests or when the schema is unavailable.
+    if HOME != Path.home() or not shutil.which("gsettings"):
+        return
+    for key, role in (("font-name", "body"), ("monospace-font-name", "monospace")):
+        value = json.dumps(
+            f'{typography[role]["family"]} {float(typography[role]["size"]):g}'
+        )
+        subprocess.run(
+            ["gsettings", "set", "org.gnome.desktop.interface", key, value],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+
+def update_gnome_resource_settings(resources: dict) -> None:
+    """Update active GNOME settings without creating a second Orbit owner."""
+    if HOME != Path.home() or not shutil.which("gsettings"):
+        return
+    values = {
+        "icon-theme": resources["icons"]["theme"],
+        "cursor-theme": XCURSOR_FALLBACK_THEME,
+        "cursor-size": str(resources["cursor"]["size"]),
+    }
+    for key, value in values.items():
+        result = subprocess.run(
+            ["gsettings", "set", "org.gnome.desktop.interface", key, value if key == "cursor-size" else json.dumps(value)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise ValueError(result.stderr.strip() or f"Could not update GSettings {key}")
+
+
+FLATPAK_ICON_BRIDGE_APPS = (
+    "io.missioncenter.MissionCenter",
+    "org.gnome.FileRoller",
+    "net.davidotek.pupgui2",
+)
+
+
+def update_flatpak_icon_bridges(resources: dict) -> None:
+    """Refresh only the Flatpak bridges already configured by Orbit helpers."""
+    flatpak = shutil.which("flatpak")
+    if not flatpak:
+        return
+    theme = resources["icons"]["theme"]
+    for app in FLATPAK_ICON_BRIDGE_APPS:
+        shown = subprocess.run(
+            [flatpak, "override", "--user", "--show", app],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if shown.returncode != 0:
+            continue
+        if "ICON_THEME=" in shown.stdout:
+            result = subprocess.run(
+                [flatpak, "override", "--user", f"--env=ICON_THEME={theme}", app],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise ValueError(result.stderr.strip() or f"Could not update Flatpak icon theme for {app}")
+
+    # ProtonUp-Qt uses the existing copied KDE bridge rather than the host
+    # hyprqt6engine plugin, so refresh it only when that bridge already exists.
+    kde_bridge = HOME / ".var/app/net.davidotek.pupgui2/config/kdeglobals"
+    if kde_bridge.is_file() and not kde_bridge.is_symlink():
+        write_atomic(kde_bridge, kdeglobals_content(typography_settings(), resources))
+
+
+def install_active_typography_adapters(palette_name: str, typography: dict | None = None) -> None:
+    typography = typography or typography_settings()
+    resources = resource_settings()
+    install_active_gtk(palette_name)
+    update_gtk_font_setting(HOME / ".config/gtk-3.0/settings.ini", typography["body"]["family"], typography["body"]["size"])
+    update_gtk_font_setting(HOME / ".config/gtk-4.0/settings.ini", typography["body"]["family"], typography["body"]["size"])
+    update_gtk_resource_settings(HOME / ".config/gtk-3.0/settings.ini", resources)
+    update_gtk_resource_settings(HOME / ".config/gtk-4.0/settings.ini", resources)
+    update_gnome_font_settings(typography)
+    update_gnome_resource_settings(resources)
+    generated = GENERATED / palette_name
+    write_atomic(HOME / ".config/hypr/hyprqt6engine.conf", hyprqt6engine_config(typography, resources))
+    update_qt6ct_fonts(HOME / ".config/qt6ct/qt6ct.conf", typography)
+    update_qt6ct_resources(HOME / ".config/qt6ct/qt6ct.conf", resources)
+    write_atomic(HOME / ".config/kdeglobals", kdeglobals_content(typography, resources))
+    write_atomic(HOME / ".config/Trolltech.conf", trolltech_content(typography))
+    write_atomic(KITTY_ACTIVE, (generated / "kitty.conf").read_text())
+    update_wezterm_font_settings(WEZTERM_CONFIG_ACTIVE, typography)
+
+
+def install_active_resource_adapters(palette_name: str, resources: dict | None = None) -> None:
+    resources = resources or resource_settings()
+    update_gtk_resource_settings(HOME / ".config/gtk-3.0/settings.ini", resources)
+    update_gtk_resource_settings(HOME / ".config/gtk-4.0/settings.ini", resources)
+    update_gnome_resource_settings(resources)
+    typography = typography_settings()
+    write_atomic(
+        HOME / ".config/hypr/hyprqt6engine.conf",
+        hyprqt6engine_config(typography, resources),
+    )
+    update_qt6ct_resources(HOME / ".config/qt6ct/qt6ct.conf", resources)
+    write_atomic(HOME / ".config/kdeglobals", kdeglobals_content(typography, resources))
+    update_flatpak_icon_bridges(resources)
+
+
+def update_wezterm_font_settings(path: Path, typography: dict) -> None:
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    lines = text.splitlines()
+    family_line = f"config.font = wezterm.font({json.dumps(typography['monospace']['family'])})"
+    size_line = f"config.font_size = {float(typography['monospace']['size']):g}"
+    family_seen = False
+    size_seen = False
+    for index, line in enumerate(lines):
+        if line.strip().startswith("config.font ="):
+            lines[index] = family_line
+            family_seen = True
+        elif line.strip().startswith("config.font_size ="):
+            lines[index] = size_line
+            size_seen = True
+    return_line = next((index for index, line in enumerate(lines) if line.strip() == "return config"), len(lines))
+    if not family_seen:
+        lines.insert(return_line, family_line)
+        return_line += 1
+    if not size_seen:
+        lines.insert(return_line, size_line)
+    write_atomic(path, "\n".join(lines).rstrip() + "\n")
+
+
+def refresh_auxiliary_adapters(palette_name: str) -> None:
+    command = HOME / ".local/bin/generate-hyprlock-colors"
+    if command.is_file():
+        subprocess.run([str(command), palette_name], check=True)
+
+
+def install_active_adapters(palette_name: str) -> None:
+    typography = typography_settings()
+    install_active_typography_adapters(palette_name, typography)
+    install_active_shape_adapters(palette_name)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="orbit-theme")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("current", help="print the selected palette")
+    subparsers.add_parser("list", help="list available palettes")
+    generate_command = subparsers.add_parser("generate", help="generate toolkit adapters")
+    generate_command.add_argument("palette", nargs="?", default=None)
+    refresh_gtk_command = subparsers.add_parser("refresh-gtk", help="refresh GTK adapters from appearance state")
+    refresh_gtk_command.add_argument("palette", nargs="?", default=None)
+    refresh_typography_command = subparsers.add_parser(
+        "refresh-typography",
+        help="refresh canonical typography and all established toolkit adapters",
+    )
+    refresh_typography_command.add_argument("palette", nargs="?", default=None)
+    refresh_resources_command = subparsers.add_parser(
+        "refresh-resources",
+        help="refresh canonical icon/cursor resource adapters",
+    )
+    refresh_resources_command.add_argument("palette", nargs="?", default=None)
+    refresh_shape_command = subparsers.add_parser(
+        "refresh-shape",
+        help="refresh canonical shape adapters",
+    )
+    refresh_shape_command.add_argument("palette", nargs="?", default=None)
+    apply_command = subparsers.add_parser("apply", help="select and generate a palette")
+    apply_command.add_argument("palette")
+    args = parser.parse_args()
+
+    if args.command == "current":
+        print(selected_palette())
+    elif args.command == "list":
+        print("noctalia")
+    elif args.command == "generate":
+        generate(args.palette or selected_palette())
+    elif args.command == "refresh-gtk":
+        palette = args.palette or selected_palette()
+        refresh_gtk(palette)
+    elif args.command == "refresh-typography":
+        palette = args.palette or selected_palette()
+        refresh_typography(palette)
+    elif args.command == "refresh-resources":
+        palette = args.palette or selected_palette()
+        refresh_resources(palette)
+    elif args.command == "refresh-shape":
+        palette = args.palette or selected_palette()
+        refresh_shape(palette)
+    elif args.command == "apply":
+        if args.palette not in ("noctalia", "noctalia.lua"):
+            raise SystemExit("Orbit accepts only the active Noctalia palette")
+        generate("noctalia")
+        install_active_adapters("noctalia")
+        # Regenerate the separate Hyprlock artifact from semantic.json.
+        home = Path.home()
+        hyprlock_script = home / ".local/bin/generate-hyprlock-colors"
+        if hyprlock_script.is_file():
+            subprocess.run([str(hyprlock_script), "noctalia"], check=True)
+        greeter_sync = home / ".local/bin/orbit-sync-noctalia-greeter"
+        if greeter_sync.is_file():
+            # Keep the greeter fed from the same current lock background source.
+            subprocess.run([str(greeter_sync)], check=False)
+
+
+if __name__ == "__main__":
+    main()

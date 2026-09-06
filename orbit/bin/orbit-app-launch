@@ -1,0 +1,100 @@
+#!/bin/sh
+
+set -eu
+
+target_monitor=
+target_workspace=
+expected_class=
+launch_id=
+placement_intent=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --monitor|--workspace|--class|--launch-id)
+            [ "$#" -ge 2 ] || { printf 'missing value for %s\n' "$1" >&2; exit 2; }
+            case "$1" in
+                --monitor) target_monitor=$2 ;;
+                --workspace) target_workspace=$2 ;;
+                --class) expected_class=$2 ;;
+                --launch-id) launch_id=$2 ;;
+            esac
+            shift 2
+            ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+
+if [ "$#" -ne 1 ]; then
+    printf 'usage: %s [--monitor NAME --workspace NAME --class CLASS] COMMAND\n' "${0##*/}" >&2
+    exit 2
+fi
+
+# Desktop Entry Exec fields are not shell commands verbatim. In particular,
+# launching without files must remove field codes such as %U rather than pass
+# them to the application as literal paths. Keep %% as a literal percent.
+command=$(
+    printf '%s' "$1" |
+        sed -E 's/%%/__ORBIT_LITERAL_PERCENT__/g; s/%[fFuUickdDnNvm]/ /g; s/__ORBIT_LITERAL_PERCENT__/%/g'
+)
+if [ -n "$launch_id" ]; then
+    command="ORBIT_LAUNCH_ID=$launch_id $command"
+    case "$launch_id" in
+        *[!A-Za-z0-9_.-]*) ;;
+        *)
+            placement_dir="${XDG_RUNTIME_DIR:-/tmp}/orbit/placement-intents"
+            mkdir -p "$placement_dir"
+            placement_intent="$placement_dir/$launch_id"
+            date +%s >"$placement_intent"
+            ;;
+    esac
+fi
+
+cleanup_placement_intent() {
+    [ -z "$placement_intent" ] || rm -f "$placement_intent"
+}
+trap cleanup_placement_intent EXIT HUP INT TERM
+
+# Export the toolkit accessibility bridges before the application creates its
+# GTK/Qt application object. GTK4 exposes GtkPopoverMenuBar through AT-SPI,
+# while GTK3 still needs the bridge module and Qt needs qtatspi enabled.
+command="QT_ACCESSIBILITY=1 GTK_MODULES=\"${GTK_MODULES:+$GTK_MODULES:}gail:atk-bridge\" $command"
+
+if [ -z "$target_monitor$target_workspace$expected_class" ]; then
+    exec systemd-run --user --scope --collect --quiet "$HOME/.local/bin/orbit-launch" --shell-command "$command"
+fi
+
+# Capture the launch context for launch correlation only. Final placement is
+# Workspace placement is handled only for the explicit allowlist.
+before=$(hyprctl clients -j 2>/dev/null || printf '[]')
+systemd-run --user --scope --collect --quiet "$HOME/.local/bin/orbit-launch" --shell-command "$command" &
+launcher_pid=$!
+
+if [ -n "$expected_class" ]; then
+    i=0
+    while [ "$i" -lt 40 ]; do
+        clients=$(hyprctl clients -j 2>/dev/null || printf '[]')
+        address=
+        while IFS='\t' read -r candidate_address candidate_pid; do
+            [ -n "$candidate_address" ] || continue
+            if [ -n "$launch_id" ] && [ -r "/proc/$candidate_pid/environ" ]; then
+                if tr '\0' '\n' < "/proc/$candidate_pid/environ" | grep -Fqx "ORBIT_LAUNCH_ID=$launch_id"; then
+                    address=$candidate_address
+                    break
+                fi
+            elif [ -z "$launch_id" ]; then
+                address=$candidate_address
+                break
+            fi
+        done <<EOF
+$(printf '%s\n' "$clients" | jq -r --arg class "$expected_class" --argjson before "$before" '
+    .[] | select(.class == $class) | select((.address as $a | [$before[]?.address] | index($a)) == null) | [.address, (.pid // "")] | @tsv')
+EOF
+        if [ -n "$address" ] && [ "$address" != "null" ]; then
+            break
+        fi
+        sleep 0.25
+        i=$((i + 1))
+    done
+fi
+
+wait "$launcher_pid"

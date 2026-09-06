@@ -1,0 +1,9 @@
+[Sound Theme]
+Name=Orbit
+Comment=Orbit session sounds
+Inherits=freedesktop
+Directories=stereo
+
+[stereo]
+OutputProfile=stereo
+OutputProfilePrefix=stereo

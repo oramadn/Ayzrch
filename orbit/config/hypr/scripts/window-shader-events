@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+
+set -u
+set -o pipefail
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+shader="$HOME/.config/hypr/shaders/window-ripple.glsl"
+focus_shader="$HOME/.config/hypr/shaders/focus-ripple.glsl"
+wezterm_shader="$HOME/.config/hypr/shaders/wezterm-ripple.glsl"
+focus_wezterm_shader="$HOME/.config/hypr/shaders/focus-wezterm-ripple.glsl"
+state_dir="${runtime_dir}/hypr-window-shader"
+game_mode_flag="${runtime_dir}/hypr-game-mode.active"
+lock_file="$state_dir/daemon.lock"
+active_windows="$state_dir/active-windows"
+focused_window="$state_dir/focused-window"
+daemon_pid_file="$state_dir/daemon.pid"
+duration="2.0"
+focus_duration="0.7"
+open_delay="0.05"
+reconnect_delay="1"
+unavailable_delay="5"
+log_interval="30"
+max_connection_failures=5
+
+discovery_kind=""
+discovery_detail=""
+discovery_signature=""
+discovery_socket=""
+
+log() {
+    printf 'window-shader-events: %s\n' "$*" >&2
+}
+
+require_commands() {
+    local command
+    for command in hyprctl jq socat flock; do
+        command -v "$command" >/dev/null 2>&1 || {
+            log "unrecoverable error: required command not found: $command"
+            return 1
+        }
+    done
+}
+
+discover_instance() {
+    local output status normalized selected
+    discovery_kind=""
+    discovery_detail=""
+    discovery_signature=""
+    discovery_socket=""
+
+    output="$(env -u HYPRLAND_INSTANCE_SIGNATURE hyprctl instances -j 2>/dev/null)"
+    status=$?
+    if (( status != 0 )); then
+        normalized="${output,,}"
+        if [[ -z "$output" || "$output" == "[]" || "$normalized" == *"not running"* ||
+              "$normalized" == *"no instance"* || "$normalized" == *"connection refused"* ]]; then
+            discovery_kind="unavailable"
+            discovery_detail="hyprctl returned no current instance (exit $status)"
+        else
+            discovery_kind="transient_malformed"
+            discovery_detail="hyprctl exit $status: ${output//$'\n'/ }"
+        fi
+        return 0
+    fi
+
+    if [[ -z "$output" ]]; then
+        discovery_kind="unavailable"
+        discovery_detail="hyprctl returned empty output"
+        return 0
+    fi
+    if ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "$output"; then
+        discovery_kind="transient_malformed"
+        discovery_detail="invalid hyprctl instances JSON: ${output//$'\n'/ }"
+        return 0
+    fi
+    if [[ "$(jq 'length' <<< "$output")" == "0" ]]; then
+        discovery_kind="unavailable"
+        discovery_detail="no running Hyprland instance"
+        return 0
+    fi
+
+    selected="$(jq -r --arg wayland "${WAYLAND_DISPLAY:-}" '
+        [ .[] | select(type == "object") ] as $objects |
+        (if $wayland != "" and ([$objects[] | select(.wl_socket == $wayland)] | length) > 0
+         then [$objects[] | select(.wl_socket == $wayland)]
+         else $objects
+         end) |
+        if length == 0 then "" else max_by(.time // 0).instance // "" end
+    ' <<< "$output" 2>/dev/null)" || {
+        discovery_kind="transient_malformed"
+        discovery_detail="unexpected hyprctl instances structure"
+        return 0
+    }
+    if [[ -z "$selected" ]]; then
+        discovery_kind="transient_malformed"
+        discovery_detail="instance list contained no usable objects"
+        return 0
+    fi
+
+    discovery_signature="$selected"
+    discovery_socket="$runtime_dir/hypr/$selected/.socket2.sock"
+    if [[ ! -S "$discovery_socket" ]]; then
+        discovery_kind="socket_missing"
+        discovery_detail="instance $selected has no event socket at $discovery_socket"
+        return 0
+    fi
+    discovery_kind="available"
+}
+
+excluded_class() {
+    case "$1" in
+        steam_app_*|Affinity|affinity|affinity.exe|resolve|Resolve|com.blackmagicdesign.resolve|darktable|Darktable|obs|OBS|com.obsproject.Studio|Inkscape|org.inkscape.Inkscape) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+set_window_shader() {
+    local address path lua_address lua_path command
+    address="$1"
+    path="$2"
+    [[ -n "$address" ]] || return 0
+    [[ "$path" == clear || ! -e "$game_mode_flag" ]] || return 0
+    [[ "$address" == 0x* ]] || address="0x$address"
+    lua_address="\"$address\""
+    lua_path="\"$path\""
+    command="hl.plugin.HyprWindowShade.togglewindowshader($lua_address, $lua_path)"
+    hyprctl eval "$command" >/dev/null 2>&1 || true
+}
+
+clear_all_window_effects() {
+    timeout 1s hyprctl clients -j 2>/dev/null |
+        jq -r '.[].address' |
+        while IFS= read -r address; do
+            [[ -n "$address" ]] || continue
+            set_window_shader "$address" clear
+        done
+}
+
+shader_enabled() {
+    return 0
+}
+
+shader_for_class() {
+    case "$1" in
+        wezterm|WezTerm|org.wezfurlong.wezterm) printf '%s\n' "$wezterm_shader" ;;
+        *) printf '%s\n' "$shader" ;;
+    esac
+}
+
+remember_window() {
+    local address="$1"
+    grep -Fqx -- "$address" "$active_windows" 2>/dev/null || printf '%s\n' "$address" >> "$active_windows"
+}
+
+forget_window() {
+    local address="$1" temporary
+    temporary="$active_windows.tmp"
+    while IFS= read -r remembered; do
+        [[ "$remembered" == "$address" ]] || printf '%s\n' "$remembered"
+    done < "$active_windows" > "$temporary" 2>/dev/null || true
+    mv "$temporary" "$active_windows"
+}
+
+animate_window() {
+    local address="$1" class="$2" effect_shader
+    shader_enabled || return 0
+    if grep -Fqx -- "$address" "$active_windows" 2>/dev/null; then
+        return 0
+    fi
+    remember_window "$address"
+    effect_shader="$(shader_for_class "$class")"
+    sleep "$open_delay"
+    # openwindow can arrive before the new client is present in the plugin's
+    # window list. Wait for the address-targeted API to be able to find it.
+    for _ in {1..20}; do
+        if hyprctl -j clients 2>/dev/null | jq -e --arg address "0x${address#0x}" \
+            '.[] | select(.address == $address)' >/dev/null; then
+            break
+        fi
+        sleep 0.05
+    done
+    set_window_shader "$address" "$effect_shader"
+    (
+        sleep "$duration"
+        set_window_shader "$address" clear
+        forget_window "$address"
+    ) &
+}
+
+clear_window() {
+    local address="$1"
+    [[ -n "$address" ]] && set_window_shader "$address" clear
+    forget_window "$address"
+}
+
+animate_focus() {
+    local address="$1" class="$2" previous generation effect_shader
+    shader_enabled || return 0
+    [[ -n "$address" ]] || return 0
+    previous=""
+    [[ -f "$focused_window" ]] && read -r previous _ < "$focused_window"
+    [[ "$previous" == "$address" ]] && return 0
+    [[ -n "$previous" && "$previous" != "$address" ]] && set_window_shader "$previous" clear
+    # Let a newly opened window finish its spawn effect instead of replacing it.
+    if grep -Fqx -- "$address" "$active_windows" 2>/dev/null; then
+        return 0
+    fi
+
+    generation="$(date +%s%N)"
+    printf '%s %s\n' "$address" "$generation" > "$focused_window"
+    if excluded_class "$class"; then
+        set_window_shader "$address" clear
+        return 0
+    fi
+
+    effect_shader="$focus_shader"
+    case "$class" in
+        wezterm|WezTerm|org.wezfurlong.wezterm) effect_shader="$focus_wezterm_shader" ;;
+    esac
+    set_window_shader "$address" "$effect_shader"
+    (
+        sleep "$focus_duration"
+        if [[ -f "$focused_window" ]] && read -r current current_generation < "$focused_window" &&
+            [[ "$current" == "$address" && "$current_generation" == "$generation" ]]; then
+            set_window_shader "$address" clear
+        fi
+    ) &
+}
+
+reconcile_window_effects() {
+    local active address class
+    if [[ -e "$game_mode_flag" ]]; then
+        clear_all_window_effects
+        return 0
+    fi
+
+    rm -f "$focused_window"
+    active="$(hyprctl -j activewindow 2>/dev/null || true)"
+    address="$(jq -r '.address // empty' <<< "$active" 2>/dev/null || true)"
+    class="$(jq -r '.class // empty' <<< "$active" 2>/dev/null || true)"
+    animate_focus "$address" "$class"
+}
+
+handle_event() {
+    local event="$1" data address class _title _workspace
+    case "$event" in
+        openwindow\>\>*)
+            data="${event#openwindow>>}"
+            IFS=',' read -r address _workspace class _title <<< "$data"
+            excluded_class "$class" || animate_window "$address" "$class"
+            ;;
+        closewindow\>\>*)
+            clear_window "${event#closewindow>>}"
+            ;;
+        activewindow\>\>*)
+            data="${event#activewindow>>}"
+            IFS=',' read -r class _title <<< "$data"
+            address="$(hyprctl -j activewindow 2>/dev/null | jq -r '.address // empty')"
+            animate_focus "$address" "$class"
+            ;;
+        activewindowv2\>\>*)
+            address="${event#activewindowv2>>}"
+            [[ "$address" == 0x* ]] || address="0x$address"
+            class="$(hyprctl -j clients 2>/dev/null | jq -r --arg address "$address" 'first(.[] | select(.address == $address) | .class) // empty')"
+            animate_focus "$address" "$class"
+            ;;
+    esac
+}
+
+process_events() {
+    local event
+    while IFS= read -r event; do
+        handle_event "$event"
+    done
+}
+
+watch_events() {
+    local signature="$1" event_socket="$2"
+    export HYPRLAND_INSTANCE_SIGNATURE="$signature"
+    log "connecting to Hyprland instance $signature at $event_socket"
+    log "connected to Hyprland instance $signature"
+    socat -u "UNIX-CONNECT:$event_socket" - 2>/dev/null | process_events
+    log "disconnected from Hyprland instance $signature; will rediscover"
+    return 1
+}
+
+announce_state() {
+    local next_state="$1" message="$2"
+    if [[ "${state:-}" != "$next_state" ]]; then
+        log "$message"
+        state="$next_state"
+    fi
+}
+
+handle_shader_clear() {
+    clear_all_window_effects
+}
+
+handle_shader_reconcile() {
+    reconcile_window_effects
+}
+
+remove_daemon_pid() {
+    [[ -f "$daemon_pid_file" ]] || return 0
+    [[ "$(cat "$daemon_pid_file" 2>/dev/null || true)" == "$$" ]] || return 0
+    rm -f "$daemon_pid_file"
+}
+
+require_commands || exit 1
+mkdir -p "$state_dir"
+exec 8>"$lock_file"
+flock -n 8 || exit 0
+: > "$active_windows"
+printf '%s\n' "$$" > "$daemon_pid_file"
+trap remove_daemon_pid EXIT
+trap handle_shader_clear USR1
+trap handle_shader_reconcile USR2
+
+state=""
+last_instance=""
+connection_failures=0
+unavailable_detail=""
+unavailable_logged_at=0
+malformed_detail=""
+malformed_logged_at=0
+
+if [[ -e "$game_mode_flag" ]]; then
+    clear_all_window_effects
+else
+    reconcile_window_effects
+fi
+
+while :; do
+    announce_state discovering "discovering current Hyprland instance"
+    discover_instance
+    case "$discovery_kind" in
+        unavailable)
+            connection_failures=0
+            now="$(date +%s)"
+            if [[ "$discovery_detail" != "$unavailable_detail" ||
+                  $((now - unavailable_logged_at)) -ge $log_interval ]]; then
+                log "Hyprland unavailable; waiting before rediscovery ($discovery_detail)"
+                unavailable_detail="$discovery_detail"
+                unavailable_logged_at="$now"
+            fi
+            sleep "$unavailable_delay"
+            ;;
+        transient_malformed)
+            connection_failures=0
+            now="$(date +%s)"
+            if [[ "$discovery_detail" != "$malformed_detail" ||
+                  $((now - malformed_logged_at)) -ge $log_interval ]]; then
+                log "Hyprland discovery output is temporarily malformed; waiting before rediscovery ($discovery_detail)"
+                malformed_detail="$discovery_detail"
+                malformed_logged_at="$now"
+            fi
+            sleep "$unavailable_delay"
+            ;;
+        fatal)
+            log "unrecoverable error: $discovery_detail"
+            exit 1
+            ;;
+        socket_missing)
+            connection_failures=$((connection_failures + 1))
+            log "current Hyprland instance is missing its event socket ($connection_failures/$max_connection_failures): $discovery_detail"
+            if ((connection_failures >= max_connection_failures)); then
+                log "unrecoverable error: repeated missing Hyprland event socket"
+                exit 1
+            fi
+            sleep "$reconnect_delay"
+            ;;
+        available)
+            announce_state connecting "selected Hyprland instance $discovery_signature; event socket $discovery_socket"
+            if [[ -n "$last_instance" && "$last_instance" != "$discovery_signature" ]]; then
+                log "Hyprland instance changed from $last_instance to $discovery_signature; reconnecting"
+            fi
+            last_instance="$discovery_signature"
+            watch_events "$discovery_signature" "$discovery_socket"
+            connection_failures=$((connection_failures + 1))
+            log "Hyprland event connection lost; reconnecting ($connection_failures/$max_connection_failures)"
+            if ((connection_failures >= max_connection_failures)); then
+                log "unrecoverable error: repeated Hyprland event connection failures"
+                exit 1
+            fi
+            sleep "$reconnect_delay"
+            ;;
+        *)
+            log "unrecoverable error: unknown discovery state $discovery_kind"
+            exit 1
+            ;;
+    esac
+done

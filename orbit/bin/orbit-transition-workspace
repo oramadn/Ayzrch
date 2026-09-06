@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+# Keep application clients alive while Orbit shows its logout/lock state.
+# Every operation is address based and uses Hyprland's silent mover: no
+# destination workspace is displayed and no client is focused.
+set -euo pipefail
+umask 077
+
+mode=${1:?usage: orbit-transition-workspace exit|enter|reset|status}
+runtime=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}
+state_dir="$runtime/orbit"
+state_file="$state_dir/session-stash.json"
+lock_file="$state_dir/session-stash.lock"
+
+mkdir -p "$state_dir"
+exec 9>"$lock_file"
+flock -x 9
+
+log() {
+    printf 'orbit-transition-workspace: %s\n' "$*" >&2
+}
+
+status() {
+    if [[ -s "$state_file" ]]; then
+        jq -c '{version, phase, stash_workspaces, windows: (.windows | length)}' "$state_file"
+    else
+        printf '%s\n' '{"phase":"idle","windows":0}'
+    fi
+}
+
+eligible_clients() {
+    hyprctl clients -j | jq -c '
+        .[]
+        | select(.mapped == true)
+        | select((.workspace.name // "") | startswith("special:") | not)
+        | select((.xdgTag // "") == "")
+        | select((.class // "") | test("^(orbit|quickshell|noctalia)([-_.:]|$)"; "i") | not)
+        | select((.initialClass // "") | test("^(orbit|quickshell|noctalia)([-_.:]|$)"; "i") | not)
+        | {address, workspace: .workspace, monitor, floating, fullscreen,
+           fullscreenClient, at, size}
+    '
+}
+
+stash_workspaces() {
+    local monitors workspaces
+    monitors=$(hyprctl monitors -j)
+    workspaces=$(hyprctl workspaces -j)
+    jq -cn --argjson monitors "$monitors" --argjson workspaces "$workspaces" '
+        ($monitors | map(.activeWorkspace.name)) as $active
+        | reduce $monitors[] as $monitor ({};
+            .[$monitor.name] = (
+                [$workspaces[]
+                 | select((.name // "") | startswith("special:") | not)
+                 | select(.name as $name | ($active | index($name) | not))
+                 | select(.monitor == $monitor.name)]
+                | sort_by(.windows, .id)
+                | first.name // ""
+            )
+        )
+        | if all(.[]; . != "") then . else empty end
+    '
+}
+
+snapshot() {
+    local tmp="$state_file.tmp"
+    local stash
+    stash=$(stash_workspaces)
+    jq -n \
+        --argjson stash "$stash" \
+        --argjson monitors "$(hyprctl monitors -j)" \
+        --argjson workspaces "$(hyprctl workspaces -j)" \
+        --argjson clients "$(eligible_clients | jq -s '.')" \
+        '{version: 3, phase: "captured", stash_workspaces: $stash,
+          active_workspaces: [$monitors[]
+            | (.activeWorkspace.name) as $active
+            | {name: $active, monitor: .name,
+               persistent: ([ $workspaces[] | select(.name == $active)
+                 | .ispersistent ] | first // false)}
+            | select((.name // "") != "")],
+          windows: [$clients[]
+            | . as $client
+            | ($monitors[] | select(.id == $client.monitor) | .name) as $monitor
+            | {address: $client.address,
+               workspace_id: $client.workspace.id,
+               workspace: $client.workspace.name,
+               workspace_persistent: ([ $workspaces[]
+                 | select(.name == $client.workspace.name)
+                 | .ispersistent ] | first // false),
+               monitor: ($monitor // ""),
+               floating: ($client.floating // false),
+               fullscreen: ($client.fullscreen // 0),
+               fullscreen_client: ($client.fullscreenClient // 0),
+               at: ($client.at // []), size: ($client.size // [])}],
+          captured_at: (now | todateiso8601)}' >"$tmp"
+    mv -f "$tmp" "$state_file"
+}
+
+scatter() {
+    [[ ! -s "$state_file" ]] || {
+        log 'snapshot already exists; refusing to overwrite original locations'
+        return 0
+    }
+    snapshot
+    local address monitor workspace stash
+    stash=$(jq -c '.stash_workspaces' "$state_file")
+    # Hyprland may discard/reassign a non-persistent workspace as soon as its
+    # last client leaves. Preserve every affected workspace in place; this
+    # does not display or focus it and keeps its monitor association intact.
+    while IFS=$'\t' read -r workspace monitor; do
+        [[ -n "$workspace" && "$workspace" != special:* && -n "$monitor" ]] || continue
+        hyprctl eval "hl.workspace_rule({ workspace = \"$workspace\", monitor = \"$monitor\", persistent = true })" >/dev/null
+    done < <(jq -r '([.active_workspaces[] | [.name, .monitor]] + [.windows[] | [.workspace, .monitor]])[] | select(.[0] != null and .[1] != null) | @tsv' "$state_file" | sort -u)
+    while IFS=$'\t' read -r address monitor; do
+        [[ -n "$address" && -n "$monitor" ]] || continue
+        workspace=$(jq -r --arg monitor "$monitor" '.[$monitor] // empty' <<<"$stash")
+        [[ -n "$workspace" && "$workspace" != special:* ]] || {
+            log "no existing non-visible stash workspace for $monitor"
+            return 1
+        }
+        # Lua-based Hyprland exposes the silent equivalent as follow=false.
+        hyprctl dispatch --quiet \
+            "hl.dsp.window.move({ workspace = \"$workspace\", follow = false, window = \"address:$address\" })" >/dev/null
+    done < <(jq -r '.windows[] | [.address, .monitor] | @tsv' "$state_file")
+    jq '.phase = "stashed"' "$state_file" >"$state_file.tmp"
+    mv -f "$state_file.tmp" "$state_file"
+    log "stashed $(jq '.windows | length' "$state_file") application window(s)"
+}
+
+fallback_workspace() {
+    local monitor="$1"
+    hyprctl workspaces -j | jq -r --arg monitor "$monitor" '
+        [ .[] | select((.name // "") | startswith("special:") | not)
+          | select(.monitor == $monitor) | .name ] | first // empty'
+}
+
+restore_one() {
+    local address="$1" workspace="$2" monitor="$3" current target
+    current=$(hyprctl clients -j | jq -c --arg address "$address" \
+        'first(.[] | select(.address == $address)) // empty')
+    [[ -n "$current" ]] || return 0
+
+    target="$workspace"
+    [[ -n "$target" && "$target" != special:* ]] || {
+        log "no safe non-special destination for $address; leaving it in place"
+        return 0
+    }
+    hyprctl dispatch --quiet \
+        "hl.dsp.window.move({ workspace = \"$target\", follow = false, window = \"address:$address\" })" >/dev/null
+
+    # Hyprland preserves floating/fullscreen state through this move. The
+    # captured values remain in the state file as the recovery record if a
+    # future compositor version needs explicit state repair.
+}
+
+restore() {
+    [[ -s "$state_file" ]] || { status; return 0; }
+    local address workspace monitor window_records workspace_records
+    window_records=$(jq -r '.windows[] | [.address, .workspace, .monitor] | @tsv' "$state_file")
+    workspace_records=$(jq -r '([.active_workspaces[] | [.name, .monitor, (.persistent | tostring)] ]
+        + [.windows[] | [.workspace, .monitor, (.workspace_persistent | tostring)] ])[] | @tsv' \
+        "$state_file" | sort -u)
+    while IFS=$'\t' read -r address workspace monitor; do
+        [[ -n "$address" ]] || continue
+        restore_one "$address" "$workspace" "$monitor"
+    done <<<"$window_records"
+    # Drop the temporary persistence used to keep empty workspaces attached to
+    # their monitors. This also lets normal empty-workspace cleanup resume.
+    while IFS=$'\t' read -r workspace monitor persistent; do
+        [[ -n "$workspace" && "$workspace" != special:* && -n "$monitor" ]] || continue
+        hyprctl eval \
+            "hl.workspace_rule({ workspace = \"$workspace\", monitor = \"$monitor\", persistent = $persistent })" >/dev/null
+    done <<<"$workspace_records"
+    rm -f -- "$state_file" "$state_file.tmp"
+    log 'restored surviving recorded application windows'
+}
+
+case "$mode" in
+    exit) scatter ;;
+    enter|reset) restore ;;
+    status) status ;;
+    *) printf 'usage: %s exit|enter|reset|status\n' "${0##*/}" >&2; exit 2 ;;
+esac

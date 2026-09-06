@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+
+# Animate monitor-local workspace changes for the lock lifecycle. This helper
+# never moves a client; temporary workspaces are ordinary and session-scoped.
+set -euo pipefail
+umask 077
+
+mode=${1:?usage: orbit-session-workspaces lock|lock-start|lock-continue|lock-wait|unlock|recover|status}
+runtime=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}
+state_dir="$runtime/orbit"
+state_file="$state_dir/session-workspaces.json"
+lock_file="$state_dir/session-workspaces.lock"
+lock_animation_seconds="0.72"
+unlock_animation_seconds="0.80"
+
+mkdir -p "$state_dir"
+exec 9>"$lock_file"
+flock -x 9
+
+log() {
+    printf 'orbit-session-workspaces: %s\n' "$*" >&2
+}
+
+status() {
+    if [[ -s "$state_file" ]]; then
+        jq -c '{version, phase, focused_monitor, monitors}' "$state_file"
+    else
+        printf '%s\n' '{"phase":"idle"}'
+    fi
+}
+
+focus_workspace_on_monitor() {
+    local monitor="$1" workspace="$2"
+    hyprctl dispatch --quiet "hl.dsp.focus({ monitor = \"$monitor\" })" >/dev/null
+    log "workspace-dispatch-ms=$(date +%s%3N) monitor=$monitor workspace=$workspace"
+    hyprctl dispatch --quiet "hl.dsp.focus({ workspace = \"name:$workspace\" })" >/dev/null
+}
+
+workspace_exists() {
+    local workspace="$1"
+    hyprctl workspaces -j | jq -e --arg workspace "$workspace" \
+        'any(.[]; .name == $workspace)' >/dev/null
+}
+
+temporary_workspace_id() {
+    local candidate="$1" occupied reserved="${2:-}"
+    occupied=$(hyprctl workspaces -j | jq -r '.[].name')
+    while grep -Fxq -- "$candidate" <<<"$occupied" || grep -Fxq -- "$candidate" <<<"$reserved"; do
+        candidate=$((candidate + 1))
+    done
+    printf '%s\n' "$candidate"
+}
+
+capture_state() {
+    local monitors workspaces focused_monitor candidates monitor identity candidate temporary original original_id temporary_ids=""
+    monitors=$(hyprctl monitors -j)
+    workspaces=$(hyprctl workspaces -j)
+    focused_monitor=$(jq -r 'first(.[] | select(.focused == true) | .name) // empty' <<<"$monitors")
+    candidates=$("$HOME/.local/bin/orbit-monitor" transition-workspaces)
+    while IFS=$'\t' read -r monitor identity candidate; do
+        [[ -n "$monitor" && -n "$candidate" ]] || continue
+        temporary=$(temporary_workspace_id "$candidate" "$temporary_ids")
+        temporary_ids+="$temporary"$'\n'
+        original=$(jq -r --arg monitor "$monitor" \
+            'first(.[] | select(.name == $monitor) | .activeWorkspace.name)' <<<"$monitors")
+        original_id=$(jq -r --arg monitor "$monitor" \
+            'first(.[] | select(.name == $monitor) | .activeWorkspace.id)' <<<"$monitors")
+        jq -cn \
+            --arg monitor "$monitor" \
+            --arg original "$original" \
+            --arg original_id "$original_id" \
+            --arg temporary "$temporary" \
+            '{monitor: $monitor, original: $original, original_id: ($original_id | tonumber), temporary: $temporary, created: false, dispatched: false}'
+    done <<<"$candidates" | jq -s '.'
+}
+
+save_state() {
+    local monitors="$1" focused_monitor="$2" tmp="$state_file.tmp"
+    jq -cn --argjson monitors "$monitors" \
+        --arg focused_monitor "$focused_monitor" \
+        '{version: 1, phase: "captured", focused_monitor: $focused_monitor,
+          monitors: $monitors}' >"$tmp"
+    mv -f "$tmp" "$state_file"
+}
+
+cleanup_temporary() {
+    local temporary monitor windows
+    while IFS=$'\t' read -r monitor temporary; do
+        [[ -n "$monitor" && -n "$temporary" ]] || continue
+        windows=$(hyprctl workspaces -j | jq -r --arg workspace "$temporary" \
+            'first(.[] | select(.name == $workspace) | .windows) // 0')
+        if [[ "$windows" == 0 ]]; then
+            hyprctl eval \
+                "hl.workspace_rule({ workspace = \"$temporary\", monitor = \"$monitor\", default = false, persistent = false })" \
+                >/dev/null || true
+        else
+            log "refusing to clean non-empty temporary workspace $temporary"
+        fi
+    done < <(jq -r '.monitors[] | [.monitor, .temporary] | @tsv' "$state_file")
+}
+
+restore_originals() {
+    local state="$1" monitor original
+    while IFS=$'\t' read -r monitor original; do
+        [[ -n "$monitor" && -n "$original" ]] || continue
+        focus_workspace_on_monitor "$monitor" "$original"
+    done < <(jq -r '.monitors[] | [.monitor, .original] | @tsv' <<<"$state")
+    sleep "$unlock_animation_seconds"
+    cleanup_temporary
+    local focused_monitor
+    focused_monitor=$(jq -r '.focused_monitor // empty' <<<"$state")
+    [[ -n "$focused_monitor" ]] && hyprctl dispatch --quiet \
+        "hl.dsp.focus({ monitor = \"$focused_monitor\" })" >/dev/null || true
+}
+
+recover_on_signal() {
+    if [[ -s "$state_file" ]]; then
+        restore_originals "$(<"$state_file")" || true
+        rm -f "$state_file" "$state_file.tmp"
+    fi
+    exit 130
+}
+
+trap recover_on_signal INT TERM
+
+prepare_lock_workspaces() {
+    [[ ! -s "$state_file" ]] || { log 'stale transition state found; recovering'; restore_originals "$(<"$state_file")"; rm -f "$state_file"; }
+    local monitors focused_monitor monitor temporary
+    monitors=$(capture_state)
+    [[ -n "$monitors" ]] || { log 'no monitors available'; return 1; }
+    focused_monitor=$(hyprctl monitors -j | jq -r 'first(.[] | select(.focused == true) | .name) // empty')
+    save_state "$monitors" "$focused_monitor"
+    while IFS=$'\t' read -r monitor temporary; do
+        [[ -n "$monitor" && -n "$temporary" ]] || continue
+        hyprctl eval \
+            "hl.workspace_rule({ workspace = \"$temporary\", monitor = \"$monitor\", default = true, persistent = false })" \
+            >/dev/null
+    done < <(jq -r '.[] | [.monitor, .temporary] | @tsv' <<<"$monitors")
+}
+
+dispatch_lock_workspace() {
+    local monitor="$1" temporary
+    temporary=$(jq -r --arg monitor "$monitor" \
+        'first(.monitors[] | select(.monitor == $monitor) | .temporary)' "$state_file")
+    [[ -n "$temporary" && "$temporary" != null ]] || return 1
+    focus_workspace_on_monitor "$monitor" "$temporary"
+}
+
+mark_lock_workspaces_dispatched() {
+    jq '(.monitors[]).created = true | (.monitors[]).dispatched = true | .phase = "locked"' \
+        "$state_file" >"$state_file.tmp"
+    mv -f "$state_file.tmp" "$state_file"
+}
+
+lock_workspaces() {
+    local monitor
+    prepare_lock_workspaces
+    while IFS= read -r monitor; do
+        [[ -n "$monitor" ]] || continue
+        dispatch_lock_workspace "$monitor"
+    done < <(jq -r '.monitors[] | .monitor' "$state_file")
+}
+
+continue_lock_workspaces() {
+    local monitor
+    [[ -s "$state_file" ]] || { log 'no session workspace state'; return 1; }
+    while IFS= read -r monitor; do
+        [[ -n "$monitor" ]] || continue
+        dispatch_lock_workspace "$monitor"
+    done < <(jq -r '.monitors[] | select(.dispatched != true) | .monitor' "$state_file")
+}
+
+wait_for_lock_workspaces() {
+    mark_lock_workspaces_dispatched
+    sleep "$lock_animation_seconds"
+}
+
+unlock_workspaces() {
+    [[ -s "$state_file" ]] || { log 'no session workspace state'; return 0; }
+    restore_originals "$(<"$state_file")"
+    rm -f "$state_file" "$state_file.tmp"
+}
+
+case "$mode" in
+    lock)
+        lock_workspaces
+        wait_for_lock_workspaces
+        ;;
+    lock-start) lock_workspaces ;;
+    lock-continue) continue_lock_workspaces ;;
+    lock-wait) wait_for_lock_workspaces ;;
+    unlock|recover) unlock_workspaces ;;
+    status) status ;;
+    *) printf 'usage: %s lock|lock-start|lock-continue|lock-wait|unlock|recover|status\n' "${0##*/}" >&2; exit 2 ;;
+esac

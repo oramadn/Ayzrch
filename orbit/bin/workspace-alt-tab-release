@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+state_file="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/orbit/alt-held"
+previous=0
+while :; do
+    current=0
+    [ -f "$state_file" ] && current=$(tr -d '[:space:]' < "$state_file")
+    if [ "$previous" = 1 ] && [ "$current" = 0 ]; then
+        "$HOME/.local/bin/workspace-alt-tab" close
+    fi
+    previous=$current
+    sleep 0.05
+done

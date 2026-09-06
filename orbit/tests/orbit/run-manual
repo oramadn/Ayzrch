@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -u -o pipefail
+
+# Attended validation runner for the current Noctalia/Hyprland architecture.
+# It never restarts the compositor or mutates runtime configuration.
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+RUN_ID="$(date -u +%Y-%m-%dT%H-%M-%SZ)-$$"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/orbit/tests"
+LOG_DIR="${ORBIT_MANUAL_LOG_DIR:-$STATE_ROOT/manual-$RUN_ID}"
+RESULTS="$LOG_DIR/results.tsv"
+mkdir -p "$LOG_DIR"
+printf 'id\tstatus\tnotes\n' > "$RESULTS"
+
+if [[ "${1:-}" == "--help" ]]; then
+    printf 'Usage: %s\n' "$0"
+    printf 'Runs current-architecture checks and attended observations.\n'
+    printf 'Logs: %s\n' "$LOG_DIR"
+    exit 0
+fi
+if [[ $# -gt 0 || ! -t 0 || ! -t 1 ]]; then
+    printf 'This runner requires an interactive terminal and accepts no options.\n' >&2
+    exit 2
+fi
+
+record() {
+    printf '%s\t%s\t%s\n' "$1" "$2" "${3//$'\t'/ }" >> "$RESULTS"
+}
+
+printf 'Current Orbit architecture manual validation\nRun: %s\nLogs: %s\n' "$RUN_ID" "$LOG_DIR"
+printf 'Automated checks are read-only; attended items require the operator to record the result.\n'
+
+printf '\n== Automated baseline ==\n'
+if "$ROOT_DIR/tests/orbit/run-all" --live | tee "$LOG_DIR/live-baseline.json"; then
+    record BASELINE PASS 'Current contract and live checks passed'
+else
+    record BASELINE FAIL 'Current contract or live checks failed'
+fi
+
+printf '\n== Current process and service graph ==\n'
+systemctl --user --no-pager --plain is-active \
+    orbit-wallpaper-engine.service workspace-alt-tab-input.service \
+    workspace-alt-tab-release.service new-workspace-apps.service \
+    window-shader-events.service hypridle.service hyprpolkitagent.service | tee "$LOG_DIR/services.txt"
+ps -eo pid=,args= | grep -E '/usr/bin/noctalia|quickshell --config global-menu --no-duplicate' | grep -v grep | tee "$LOG_DIR/processes.txt" || true
+hyprctl plugins list | tee "$LOG_DIR/plugins.txt"
+
+printf '\n== Attended items ==\n'
+printf 'MAN-001: confirm Noctalia bars/panels and notifications are visually present.\n'
+read -r -p 'Result [PASS/FAIL/BLOCKED]: ' result; record MAN-001 "${result^^}" 'Noctalia visual health';
+printf 'MAN-002: press Alt+Tab repeatedly, release Alt, and confirm ScrollOverview closes/activates correctly.\n'
+read -r -p 'Result [PASS/FAIL/BLOCKED]: ' result; record MAN-002 "${result^^}" 'Alt-Tab release and MRU behavior';
+printf 'MAN-003: inspect Wallpaper Engine continuity during a normal workspace transition.\n'
+read -r -p 'Result [PASS/FAIL/BLOCKED]: ' result; record MAN-003 "${result^^}" 'Wallpaper continuity';
+printf 'MAN-004: launch a canonical new-workspace allowlisted app and confirm service-owned placement.\n'
+read -r -p 'Result [PASS/FAIL/BLOCKED]: ' result; record MAN-004 "${result^^}" 'Canonical new-workspace ownership';
+
+printf '\nResults: %s\n' "$RESULTS"
+if grep -q $'\tFAIL\t' "$RESULTS"; then exit 1; fi
+exit 0

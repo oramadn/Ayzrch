@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly app_id='org.localsend.localsend_app'
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+# The native Arch package stores Flutter shared preferences under the data home.
+# Fall back to a bounded search so a Flutter path change stays recoverable.
+settings_file="$data_home/$app_id/shared_preferences.json"
+if [[ ! -f "$settings_file" ]]; then
+    settings_file=$(find "$data_home" -maxdepth 3 -name shared_preferences.json \
+        -path "*localsend*" -print -quit 2>/dev/null || true)
+fi
+
+if [[ -z "$settings_file" || ! -f "$settings_file" ]]; then
+    printf 'LocalSend settings were not found under %s\n' "$data_home" >&2
+    printf 'Launch LocalSend once before running this command.\n' >&2
+    exit 1
+fi
+
+tmp_file=$(mktemp "${settings_file}.tmp.XXXXXX")
+trap 'rm -f "$tmp_file"' EXIT
+
+alias_name="${ORBIT_LOCAL_SEND_ALIAS:-$(hostnamectl --static 2>/dev/null || hostname)}"
+jq --arg alias "$alias_name" '."flutter.ls_alias" = $alias' "$settings_file" >"$tmp_file"
+chmod --reference="$settings_file" "$tmp_file"
+mv "$tmp_file" "$settings_file"
+trap - EXIT
+
+printf 'LocalSend device name set to %s.\n' "$alias_name"

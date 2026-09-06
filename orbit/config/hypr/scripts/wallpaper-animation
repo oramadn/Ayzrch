@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# Compatibility helper for non-session wallpaper actions. Session choreography is
+# owned by orbit-session-transition.
+
+set -eu
+
+# Signal Orbit Wallpaper Engine without ever blocking the session transition.
+signal_renderer() {
+    control="$HOME/.cache/orbit-wallpaper-engine/control"
+
+    [ -p "$control" ] || return 0
+
+    timeout 0.5s sh -c '
+        printf "%s\n" "$1" > "$2"
+    ' sh "$1" "$control" >/dev/null 2>&1 || true
+}
+
+# Play system sound (if available). Session sounds stored in systemd user data directory.
+play_session_sound() {
+    "$HOME/.local/bin/play-session-sound" "$1" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+    intro)
+        play_session_sound login
+        systemctl --user reload orbit-wallpaper-engine.service >/dev/null 2>&1 || true  # Canonical intro/reveal contract.
+        ;;
+    exit)
+        play_session_sound logout
+        signal_renderer exit  # Wallpaper animates out (fade/shrink).
+        ;;
+    palette)
+        # Wallpaper palette changed: signal service to regenerate colors.
+        signal_renderer palette
+        ;;
+    *)
+        printf 'usage: %s {intro|exit|palette}\n' "$0" >&2
+        exit 2
+        ;;
+esac

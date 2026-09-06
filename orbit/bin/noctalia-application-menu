@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Output-local Orbit application identity and activate its fallback actions."""
+
+import configparser
+import json
+import os
+import subprocess
+import sys
+
+
+def command_json(*args):
+    try:
+        result = subprocess.run(args, check=False, text=True, capture_output=True, timeout=10)
+        return json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+
+
+def desktop_dirs():
+    data_home = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    return [os.path.join(data_home, "applications")] + [os.path.join(item, "applications") for item in data_dirs if item]
+
+
+def desktop_files():
+    for directory in desktop_dirs():
+        try:
+            for name in os.listdir(directory):
+                if name.endswith(".desktop"):
+                    yield os.path.join(directory, name)
+        except OSError:
+            continue
+
+
+def desktop_entry(identity):
+    identity = str(identity or "")
+    lowered = identity.casefold()
+    files = list(desktop_files())
+    exact = [path for path in files if os.path.splitext(os.path.basename(path))[0].casefold() == lowered]
+    candidates = exact or files
+    heuristic = None
+    for path in candidates:
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
+        parser.optionxform = str
+        try:
+            with open(path, encoding="utf-8", errors="replace") as stream:
+                parser.read_file(stream)
+            section = parser["Desktop Entry"]
+        except (OSError, KeyError, configparser.Error):
+            continue
+        startup = section.get("StartupWMClass", "").casefold()
+        entry_id = os.path.splitext(os.path.basename(path))[0].casefold()
+        if startup == lowered or entry_id == lowered:
+            return section
+        if heuristic is None and (lowered in entry_id or entry_id in lowered):
+            heuristic = section
+    return heuristic
+
+
+def icon_path(name):
+    if not name:
+        return ""
+    if os.path.isabs(name) and os.path.exists(name):
+        return name
+    themes = []
+    try:
+        theme = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "icon-theme"],
+            check=False, text=True, capture_output=True, timeout=2,
+        ).stdout.strip().strip("'")
+        if theme:
+            themes.append(theme)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    themes += ["hicolor", "Adwaita"]
+    roots = [os.path.expanduser("~/.local/share/icons"), "/usr/local/share/icons", "/usr/share/icons", "/usr/share/pixmaps"]
+    suffixes = [".svg", ".png", ".xpm"]
+    for root in roots:
+        for theme in themes:
+            for size in ("scalable", "48x48", "32x32", "24x24", "16x16"):
+                for category in ("apps", "app", "places", "devices", "mimetypes"):
+                    for suffix in suffixes:
+                        path = os.path.join(root, theme, size, category, name + suffix)
+                        if os.path.exists(path):
+                            return path
+        for suffix in suffixes:
+            path = os.path.join(root, name + suffix)
+            if os.path.exists(path):
+                return path
+    return ""
+
+
+def identity_record(candidate):
+    identity = candidate.get("initialClass") or candidate.get("class") or ""
+    entry = desktop_entry(identity)
+    class_name = candidate.get("class") or candidate.get("initialClass") or ""
+    name = entry.get("Name", "") if entry else ""
+    if not name:
+        parts = class_name.split(".")
+        name = parts[-1] if parts and parts[-1] else "Unknown application"
+    icon = icon_path(entry.get("Icon", "")) if entry else ""
+    return {
+        "name": name,
+        "icon": icon or icon_path("application-x-executable"),
+        "address": str(candidate.get("address", "")),
+        "pid": int(candidate.get("pid") or 0),
+        "exec": entry.get("Exec", "") if entry else "",
+    }
+
+
+def snapshot(window_filter=""):
+    command = ["noctalia-global-menu", "snapshot"]
+    if window_filter:
+        command.append(window_filter)
+    result = command_json(*command) or {"outputs": {}}
+    for output, state in (result.get("outputs") or {}).items():
+        candidate = state.get("candidate")
+        state["application"] = identity_record(candidate) if candidate else None
+    print(json.dumps(result, separators=(",", ":")))
+
+
+def activate(output, action):
+    candidate = command_json("hyprctl", "activewindow", "-j") or {}
+    if not candidate:
+        return 1
+    address = str(candidate.get("address") or "")
+    if action == "close":
+        focus = f'hl.dsp.focus({{ window = "address:{address}" }})'
+        return subprocess.run(["sh", "-lc", f"hyprctl dispatch '{focus}' && hyprctl dispatch 'hl.dsp.window.close()'"]).returncode
+    if action == "force-quit":
+        return subprocess.run(["kill", "-KILL", str(candidate.get("pid", 0))]).returncode
+    if action == "launch":
+        application = identity_record(candidate)
+        if application["exec"]:
+            return subprocess.run([os.path.expanduser("~/.local/bin/orbit-app-launch"), application["exec"]]).returncode
+    return 1
+
+
+if len(sys.argv) == 1 or sys.argv[1] == "snapshot":
+    snapshot(sys.argv[2] if len(sys.argv) > 2 else "")
+elif len(sys.argv) == 3 and sys.argv[1] == "identity":
+    candidate = json.loads(sys.argv[2])
+    print(json.dumps(identity_record(candidate), separators=(",", ":")))
+elif len(sys.argv) == 4 and sys.argv[1] == "activate":
+    raise SystemExit(activate(sys.argv[2], sys.argv[3]))
+else:
+    raise SystemExit("usage: noctalia-application-menu [snapshot|activate OUTPUT ACTION]")

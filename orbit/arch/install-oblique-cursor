@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Install the oblique-cursor hyprcursor theme referenced by Orbit's
+# appearance.toml and hyprland.lua. Upstream ships release tarballs; there is
+# no Arch package.
+
+set -euo pipefail
+
+release_tag="v1.0.0"
+asset="oblique-cursor.tar.gz"
+url="https://github.com/kayxean/oblique-cursor/releases/download/$release_tag/$asset"
+icons_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons"
+theme_dir="$icons_dir/oblique-cursor"
+
+if [[ -d "$theme_dir" ]]; then
+    printf 'oblique-cursor is already installed: %s\n' "$theme_dir"
+    exit 0
+fi
+
+command -v curl >/dev/null || { printf '%s\n' 'error: curl is required' >&2; exit 1; }
+
+work_dir=$(mktemp -d)
+trap 'rm -rf "$work_dir"' EXIT
+
+curl -fsSL "$url" -o "$work_dir/$asset"
+tar -xzf "$work_dir/$asset" -C "$work_dir"
+
+# The tarball's top-level directory name has varied across releases; take the
+# first directory containing a hyprcursor manifest.
+extracted=$(find "$work_dir" -mindepth 1 -maxdepth 2 -name manifest.hl -printf '%h\n' -quit)
+if [[ -z "$extracted" ]]; then
+    extracted=$(find "$work_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)
+fi
+[[ -n "$extracted" ]] || { printf '%s\n' 'error: could not locate the cursor theme in the release archive' >&2; exit 1; }
+
+mkdir -p "$icons_dir"
+cp -a "$extracted" "$theme_dir"
+printf 'Installed %s from %s\n' "$theme_dir" "$release_tag"

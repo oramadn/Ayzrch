@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -eu
+
+case "${1:-}" in
+    open)
+        printf 'HYPR_DISPATCH source=orbit-scrolloverview action=open target=all\n' | systemd-cat -t orbit-overview-exec
+        hyprctl eval 'hl.plugin.scrolloverview._dispatch("overview", "open all")' >/dev/null
+        ;;
+    close)
+        printf 'HYPR_DISPATCH source=orbit-scrolloverview action=close target=all\n' | systemd-cat -t orbit-overview-exec
+        hyprctl eval 'hl.plugin.scrolloverview._dispatch("overview", "close all")' >/dev/null 2>&1 || true
+        ;;
+    *)
+        printf 'Usage: %s {open|close}\n' "${0##*/}" >&2
+        exit 2
+        ;;
+esac

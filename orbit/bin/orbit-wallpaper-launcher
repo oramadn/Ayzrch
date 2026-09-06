@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+title='Orbit Wallpaper Engine'
+
+# Reuse the existing settings window instead of creating duplicate UI processes.
+existing_address=$(hyprctl clients -j 2>/dev/null | jq -r --arg title "$title" '
+    ([.[] | select(.title == $title) | .address] | first) // ""')
+if [[ -n "$existing_address" ]]; then
+    exec hyprctl dispatch "hl.dsp.focus({ window = \"address:$existing_address\" })"
+fi
+
+# Keep the accepted Orbit placement policy: active monitor, top-right, 20px gap.
+exec hyprctl dispatch 'hl.dsp.exec_cmd("orbit-wallpaper-settings", { float = true, size = { 560, 760 }, move = { "monitor_w-560-20", 45 } })'

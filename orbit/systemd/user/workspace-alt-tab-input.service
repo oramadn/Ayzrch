@@ -1,0 +1,17 @@
+[Unit]
+Description=Alt key state for workspace-oriented Alt-Tab
+PartOf=hyprland-session.target
+
+[Service]
+# Upstream wraps this in `sg input`. Arch's shadow package ships `newgrp` but no
+# `sg`, so that exec fails outright; the user is added to the `input` group at
+# install instead, which is what the wrapper was reaching for.
+ExecStart=%h/.local/bin/orbit-input-state
+RuntimeDirectory=orbit
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+[Install]
+WantedBy=hyprland-session.target

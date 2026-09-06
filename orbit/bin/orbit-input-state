@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+
+import errno
+import os
+import selectors
+import struct
+
+try:
+    import evdev
+    from evdev import ecodes
+except ImportError:
+    evdev = None
+    ecodes = None
+
+try:
+    import pyudev
+except ImportError:
+    pyudev = None
+
+
+EVENT = struct.Struct("llHHi")
+EV_KEY = 1
+ALT_CODES = {56, 100}
+runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+state_dir = os.path.join(runtime_dir, "orbit")
+state_file = os.path.join(state_dir, "alt-held")
+
+
+def write_state(held):
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    temporary = state_file + ".tmp"
+    with open(temporary, "w", encoding="ascii") as stream:
+        stream.write("1\n" if held else "0\n")
+    os.replace(temporary, state_file)
+
+
+def has_alt_capability(capabilities):
+    """Accept only evdev devices that can report a physical Alt key."""
+    if ecodes is None:
+        return False
+    return bool(set(capabilities.get(ecodes.EV_KEY, ())) & ALT_CODES)
+
+
+def keyboard_device_paths(context):
+    paths = set()
+    for device in context.list_devices(subsystem="input"):
+        node = device.device_node or ""
+        if not os.path.basename(node).startswith("event"):
+            continue
+        paths.add(node)
+    return paths
+
+
+def open_eligible_device(path):
+    try:
+        device = evdev.InputDevice(path)
+        if not has_alt_capability(device.capabilities()):
+            device.close()
+            return None
+        os.set_blocking(device.fd, False)
+        active = set(device.active_keys()) & ALT_CODES
+        return device, active
+    except (OSError, IOError):
+        try:
+            device.close()
+        except (NameError, UnboundLocalError, AttributeError):
+            pass
+        return None
+
+
+class AltState:
+    def __init__(self, writer=write_state):
+        self.devices = {}
+        self.held = False
+        self.writer = writer
+
+    def _emit_if_changed(self):
+        next_held = any(self.devices.values())
+        if next_held != self.held:
+            self.held = next_held
+            self.writer(self.held)
+
+    def set_device_state(self, path, keys):
+        self.devices[path] = set(keys) & ALT_CODES
+        self._emit_if_changed()
+
+    def remove_device(self, path, emit=True):
+        self.devices.pop(path, None)
+        if emit:
+            self._emit_if_changed()
+
+    def event(self, path, event_type, code, value):
+        if event_type != EV_KEY or code not in ALT_CODES:
+            return
+        keys = self.devices.setdefault(path, set())
+        if value == 1:
+            keys.add(code)
+        elif value == 0:
+            keys.discard(code)
+        self._emit_if_changed()
+
+
+def drain_device(fd, path, state, reader=os.read):
+    """Drain one nonblocking evdev fd until EAGAIN."""
+    while True:
+        try:
+            payload = reader(fd, EVENT.size)
+        except OSError as error:
+            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                return True
+            return False
+        if not payload:
+            return False
+        if len(payload) != EVENT.size:
+            continue
+        _, _, event_type, code, value = EVENT.unpack(payload)
+        state.event(path, event_type, code, value)
+
+
+class InputMonitor:
+    def __init__(self):
+        self.context = pyudev.Context()
+        self.monitor = pyudev.Monitor.from_netlink(self.context)
+        self.monitor.filter_by(subsystem="input")
+        self.monitor.enable_receiving()
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.monitor, selectors.EVENT_READ, "udev")
+        self.handles = {}
+        self.state = AltState()
+
+    def close_device(self, path):
+        entry = self.handles.pop(path, None)
+        if entry is not None:
+            self.selector.unregister(entry[0].fd)
+            entry[0].close()
+        self.state.remove_device(path)
+
+    def reconcile(self, reopen=False):
+        eligible = keyboard_device_paths(self.context)
+        for path in set(self.handles) - eligible:
+            self.close_device(path)
+        for path in eligible:
+            if path in self.handles and not reopen:
+                continue
+            if path in self.handles:
+                self.close_device(path)
+            opened = open_eligible_device(path)
+            if opened is None:
+                continue
+            device, active = opened
+            self.handles[path] = (device, active)
+            self.selector.register(device.fd, selectors.EVENT_READ, path)
+            self.state.set_device_state(path, active)
+
+    def run(self):
+        self.state.writer(False)
+        self.reconcile()
+        while True:
+            for key, _ in self.selector.select():
+                if key.data == "udev":
+                    while self.monitor.poll(timeout=0) is not None:
+                        pass
+                    self.reconcile(reopen=True)
+                    continue
+                path = key.data
+                device = self.handles.get(path)
+                if device is None or not drain_device(device[0].fd, path, self.state):
+                    self.close_device(path)
+
+
+def main():
+    if evdev is None or pyudev is None:
+        raise SystemExit("orbit-input-state requires evdev and pyudev")
+    InputMonitor().run()
+
+
+if __name__ == "__main__":
+    main()

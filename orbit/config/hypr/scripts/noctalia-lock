@@ -1,0 +1,44 @@
+#!/bin/sh
+# Stand-in for hyprlock in orbit-session-transition.
+#
+# The transition's locker contract is "engage the lock and block until the
+# session is unlocked" — hyprlock does that by running in the foreground.
+# Noctalia's lock is engaged over IPC and returns immediately, so block on
+# logind's LockedHint, which Noctalia maintains through its logind integration.
+
+set -eu
+
+session="${XDG_SESSION_ID:-}"
+[ -n "$session" ] || session="$(loginctl show-session -p Id --value 2>/dev/null || true)"
+
+locked_hint() {
+    [ -n "$session" ] || return 1
+    [ "$(loginctl show-session "$session" -p LockedHint --value 2>/dev/null || echo no)" = "yes" ]
+}
+
+noctalia msg session lock >/dev/null || exit 1
+
+# Wait for the lock to engage. Bounded: if LockedHint never reports the lock,
+# fall through rather than hang the transition forever.
+attempt=0
+while [ "$attempt" -lt 50 ] && ! locked_hint; do
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+
+if [ "$attempt" -ge 50 ]; then
+    printf 'noctalia-lock: logind never reported the session locked\n' >&2
+    exit 0
+fi
+
+# The lock destroys the wallpaper renderer's layer surfaces and its own recovery
+# does not restore them all, so restart it here — behind the lock screen, where
+# the recreation is invisible — rather than after the unlock, where it shows as
+# several seconds of black. start-noctalia-lock still checks afterwards and
+# recovers again if this did not take.
+systemctl --user restart orbit-wallpaper-engine.service >/dev/null 2>&1 || true
+
+# Then hold until it is released; the transition plays its unlock sequence next.
+while locked_hint; do
+    sleep 0.5
+done

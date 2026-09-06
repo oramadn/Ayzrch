@@ -1,0 +1,70 @@
+#!/bin/sh
+
+# Focus workspace intelligently: try to focus within current workspace first (up/down through windows),
+# then switch workspaces at workspace boundaries. This prevents disorienting jumps.
+# Usage: focus-workspace {u|d}  (u=up/previous, d=down/next)
+
+set -eu
+
+direction=${1:-}
+case "$direction" in
+    u) step=-1; focus_direction=up ;;  # Up: previous window or previous workspace.
+    d) step=1; focus_direction=down ;;  # Down: next window or next workspace.
+    *) exit 2 ;;
+esac
+
+# Get current workspace ID and monitor name.
+active=$(hyprctl activeworkspace -j)
+workspace=$(printf '%s\n' "$active" | jq -r '.id')
+monitor=$(printf '%s\n' "$active" | jq -r '.monitor')
+
+# Check if there's a focusable window in the requested direction within the current workspace.
+# Hyprland's directional focus wraps at the edge; we want to transition to another workspace
+# instead. Compare Y-center positions to find windows above/below the active window.
+active_window=$(hyprctl activewindow -j)
+clients=$(hyprctl clients -j)
+has_window=$(jq -n \
+    --arg direction "$focus_direction" \
+    --argjson active "$active_window" \
+    --argjson clients "$clients" '
+    [$clients[]
+        | select(.mapped and (.hidden | not))  # Only visible, mapped windows.
+        | select(.workspace.id == $active.workspace.id and .monitor == $active.monitor)  # Same workspace/monitor.
+        | select(.address != $active.address)  # Not the active window itself.
+        | ((.at[1] + (.size[1] / 2)) as $center  # Y-center of candidate.
+            | ($active.at[1] + ($active.size[1] / 2)) as $active_center  # Y-center of active.
+            | select(if $direction == "down" then $center > $active_center else $center < $active_center end))  # In requested direction.
+    ] | length > 0')
+
+# If there's a focusable window, focus it (within the workspace).
+if [ "$has_window" = true ]; then
+    hyprctl dispatch --quiet "hl.dsp.focus({ direction = \"$focus_direction\" })"
+    exit 0
+fi
+
+# No window in direction; switch to another workspace instead.
+
+# Get ordered list of workspaces on the current monitor.
+mapfile -t workspaces < <(
+    hyprctl workspaces -j |
+        jq -r --arg monitor "$monitor" '.[] | select(.monitor == $monitor) | .id' |
+        sort -n
+)
+
+count=${#workspaces[@]}
+[ "$count" -gt 0 ] || exit 0
+
+# Find current workspace index in the sorted list.
+index=0
+for i in "${!workspaces[@]}"; do
+    [ "${workspaces[$i]}" -eq "$workspace" ] && index="$i"
+done
+
+# Calculate target workspace index (wrap around at edges).
+target_index=$((index + step))
+[ "$target_index" -ge 0 ] || target_index=$((count - 1))  # Wrap: last -> first.
+[ "$target_index" -lt "$count" ] || target_index=0  # Wrap: past-end -> first.
+target="${workspaces[$target_index]}"
+
+# Focus the target workspace.
+hyprctl dispatch --quiet "hl.dsp.focus({ workspace = \"$target\" })"

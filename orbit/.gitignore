@@ -1,0 +1,11 @@
+# Generated, machine-local, runtime, build, and secret material.
+config/orbit/machine/*.conf
+config/hypr/monitors.lua
+config/hypr/*-colors.conf
+config/orbit/generated/
+*.so
+**/__pycache__/
+build/
+dist/
+.venv/
+*.log

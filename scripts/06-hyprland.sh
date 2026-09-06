@@ -16,19 +16,8 @@ sudo pacman -S --needed --noconfirm \
     hyprlock \
     hypridle
 
-# Optional: configure NVIDIA environment variables only if GPU is present
-if lspci | grep -i 'nvidia' >/dev/null; then
-    HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
-    if [ -f "$HYPRLAND_CONF" ]; then
-        echo ":: Adding NVIDIA environment variables to hyprland.conf"
-        cat >>"$HYPRLAND_CONF" <<'EOF'
-
-# NVIDIA environment variables
-env = NVD_BACKEND,direct
-env = LIBVA_DRIVER_NAME,nvidia
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
-EOF
-    fi
-fi
+# NVIDIA environment variables now live in orbit/config/hypr/hyprland.lua,
+# guarded on /proc/driver/nvidia/version. Hyprland 0.55+ uses the Lua config,
+# so there is no hyprland.conf to append to. See scripts/15-orbit.sh.
 
 echo ":: Hyprland installation complete!"

@@ -1,0 +1,40 @@
+[Unit]
+Description=Orbit Wallpaper Engine
+PartOf=hyprland-session.target
+After=graphical-session-pre.target
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p %h/.cache/orbit-wallpaper-engine
+ExecStart=%h/.local/bin/orbit-wallpaper-engine
+
+# Reloading the service means "play the intro animation again" through the
+# authoritative, timeout-bounded control API.
+ExecReload=%h/.local/bin/orbit-wallpaper-control intro
+
+# The EnvironmentFile may override this integration default with an explicit
+# user-selected palette source.
+Environment=ORBIT_WALLPAPER_PALETTE_FILE=%h/.config/hypr/noctalia.lua
+EnvironmentFile=-%h/.config/orbit-wallpaper-engine/config
+# The session integration sends the login/unlock intro after the compositor and
+# frontend are ready. A service restart remains hidden until an explicit intro.
+Environment=ORBIT_WALLPAPER_START_HIDDEN=1
+Environment=ORBIT_WALLPAPER_DISABLE_SNAPSHOTS=1
+Environment=ORBIT_WALLPAPER_FOLLOW_SYSTEM_PALETTE=1
+Environment=ORBIT_WALLPAPER_BACKGROUND_FILE=%h/.cache/orbit-wallpaper-engine/hyprlock-background.conf
+Environment=ORBIT_WALLPAPER_CONTROL_FILE=%h/.cache/orbit-wallpaper-engine/control
+Environment=ORBIT_WALLPAPER_STATUS_FILE=%h/.cache/orbit-wallpaper-engine/status
+Environment=ORBIT_WALLPAPER_EVENTS_FILE=%h/.cache/orbit-wallpaper-engine/events
+
+# The renderer exits 0 when its Wayland connection drops (a compositor restart,
+# a session lock yanking surfaces), so on-failure never fires and the wallpaper
+# silently stays gone. RestartPreventExitStatus=78 still covers deliberate exits.
+Restart=always
+RestartSec=2
+RestartPreventExitStatus=78
+TimeoutStartSec=70s
+TimeoutStopSec=5
+FinalKillSignal=SIGKILL
+ExecStopPost=/usr/bin/rm -f %h/.cache/orbit-wallpaper-engine/status
+
+[Install]
+WantedBy=hyprland-session.target

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# Preserve Orbit's semantic Home-workspace roles without naming physical
+# connectors. IDs are allocated in five-workspace blocks.
+set -euo pipefail
+
+dry_run=false
+input=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) dry_run=true ;;
+        --input) shift; input=${1:?--input requires a JSON file} ;;
+        *) printf 'usage: %s [--dry-run] [--input JSON]\n' "$0" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+if [[ -n "$input" ]]; then
+    monitor_json=$(<"$input")
+elif [[ "$dry_run" == true && -p /dev/stdin ]]; then
+    monitor_json=$(cat)
+else
+    monitor_json=$(hyprctl monitors -j)
+fi
+
+mapfile -t monitors < <(jq -r 'sort_by([(.x // 0), (.y // 0), (.name // "")]) | .[].name' <<<"$monitor_json")
+
+for index in "${!monitors[@]}"; do
+    workspace=$((1 + index * 5))
+    monitor="${monitors[$index]}"
+    [[ -n "$monitor" ]] || continue
+    if [[ "$dry_run" == true ]]; then
+        printf '%s\t%s\tdefault=true\tpersistent=true\n' "$monitor" "$workspace"
+    else
+        hyprctl eval "hl.workspace_rule({ workspace = \"$workspace\", monitor = \"$monitor\", default = true, persistent = true })" >/dev/null
+    fi
+done

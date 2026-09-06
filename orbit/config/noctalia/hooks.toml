@@ -1,0 +1,2 @@
+[hooks]
+colors_changed = "sh -c '~/.local/bin/orbit-update-all-colors noctalia || true; ~/.config/hypr/scripts/wallpaper-animation palette || true'"

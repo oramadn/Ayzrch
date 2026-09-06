@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_url="${ORBIT_WALLPAPER_REPO_URL:-git@github.com:CleanShirtUK/orbit-wallpaper-engine.git}"
+repo_dir="${ORBIT_WALLPAPER_REPO_DIR:-$HOME/.local/src/orbit-wallpaper-engine}"
+ref="${ORBIT_WALLPAPER_REF:-v0.2.0}"
+
+install_external_file() {
+    local source="$1" destination="$2" mode="$3"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        cmp -s "$source" "$destination" || {
+            printf 'refusing to replace unrelated Wallpaper Engine integration file: %s\n' "$destination" >&2
+            return 1
+        }
+        return 0
+    fi
+    install -D -m "$mode" "$source" "$destination"
+}
+
+install_noctalia_integration() {
+    local plugin_source="$repo_dir/integrations/noctalia"
+    [[ -f "$plugin_source/plugin.toml" && -f "$plugin_source/widget.luau" ]] || {
+        printf 'Wallpaper Engine Noctalia integration is missing from %s\n' "$repo_dir" >&2
+        return 1
+    }
+    install_external_file "$repo_dir/tools/orbit-wallpaper-settings" \
+        "$HOME/.local/bin/orbit-wallpaper-settings" 0755
+    install_external_file "$plugin_source/plugin.toml" \
+        "$HOME/.local/share/noctalia/plugins/orbit-wallpaper-engine/plugin.toml" 0644
+    install_external_file "$plugin_source/widget.luau" \
+        "$HOME/.local/share/noctalia/plugins/orbit-wallpaper-engine/widget.luau" 0644
+}
+
+if [[ -d "$repo_dir/.git" ]]; then
+    git -C "$repo_dir" fetch --tags origin
+else
+    mkdir -p "$(dirname "$repo_dir")"
+    git clone "$repo_url" "$repo_dir"
+fi
+
+git -C "$repo_dir" fetch --tags origin
+git -C "$repo_dir" checkout "$ref"
+make -C "$repo_dir"
+install_noctalia_integration
+
+# The renderer is installed from this build of the pinned checkout rather than
+# from a prebuilt binary committed to the Orbit repository. The destination is
+# an Orbit-owned symlink on a fresh deployment, so remove it before writing —
+# `install` would otherwise write through the link into the repository.
+rm -f "$HOME/.local/bin/orbit-wallpaper-engine"
+install -D -m 0755 "$repo_dir/orbit-wallpaper-engine" "$HOME/.local/bin/orbit-wallpaper-engine"
+
+# Runtime data the renderer resolves under the data home.
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}/orbit-wallpaper-engine"
+install -D -m 0644 "$repo_dir/wave.frag" "$data_home/wave.frag"
+for qml in "$repo_dir"/settings/*.qml; do
+    [[ -f "$qml" ]] || continue
+    install -D -m 0644 "$qml" "$data_home/settings/$(basename "$qml")"
+done
+mkdir -p "$HOME/.config/orbit-wallpaper-engine/shaders"
+if [[ ! -e "$HOME/.config/orbit-wallpaper-engine/config" ]]; then
+    install -D -m 0644 "$repo_dir/orbit-wallpaper-engine.conf" \
+        "$HOME/.config/orbit-wallpaper-engine/config"
+fi
+
+# bootstrap/deploy owns ~/.local/bin/orbit-wallpaper-launcher, the desktop entry
+# and the user unit; the external project must not overwrite them.
+systemctl --user daemon-reload
+systemctl --user enable orbit-wallpaper-engine.service

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Directional movement owner for Super+Shift+Arrow.
+set -euo pipefail
+
+direction=${1:-}
+case "$direction" in
+    l) step=-1; hypr_direction=left ;;
+    r) step=1; hypr_direction=right ;;
+    u) step=-1; hypr_direction=up ;;
+    d) step=1; hypr_direction=down ;;
+    *) exit 2 ;;
+esac
+
+source "$HOME/.local/lib/orbit-directional-topology.sh"
+
+active_window=$(hyprctl activewindow -j)
+read -r address workspace_id workspace_name monitor_id floating active_x active_y active_w active_h < <(
+    jq -r '[.address // "", .workspace.id // "", .workspace.name // "", .monitor // "", (.floating // false), .at[0] // 0, .at[1] // 0, .size[0] // 0, .size[1] // 0] | @tsv' <<<"$active_window"
+)
+[[ -n "$address" && -n "$workspace_id" && -n "$monitor_id" ]] || exit 0
+
+focus_window() {
+    hyprctl dispatch --quiet "hl.dsp.focus({ window = \"address:0x${address#0x}\" })" >/dev/null
+}
+
+move_to_workspace() {
+    local target="$1" target_monitor="${2:-}" monitor_argument=""
+    [[ -n "$target_monitor" ]] && monitor_argument=", monitor = \"$target_monitor\""
+    hyprctl dispatch --quiet "hl.dsp.window.move({ workspace = \"$target\", follow = true${monitor_argument}, window = \"address:0x${address#0x}\" })" >/dev/null
+    focus_window
+}
+
+clients_data=""
+same_workspace_clients() {
+    jq -c --argjson workspace "$workspace_id" --argjson monitor "$monitor_id" \
+        '.[] | select(.mapped and (.hidden | not) and .workspace.id == $workspace and .monitor == $monitor and (.floating | not))' \
+        <<<"$clients_data"
+}
+
+intra_workspace_move_possible() {
+    same_workspace_clients | jq -s -e \
+        --arg direction "$direction" --argjson active_x "$active_x" --argjson active_y "$active_y" \
+        --argjson active_w "$active_w" --argjson active_h "$active_h" '
+        any(.[ ];
+            (.at[0] + (.size[0] / 2)) as $x |
+            (.at[1] + (.size[1] / 2)) as $y |
+            ($active_x + ($active_w / 2)) as $cx |
+            ($active_y + ($active_h / 2)) as $cy |
+            if $direction == "l" then $x < $cx elif $direction == "r" then $x > $cx
+            elif $direction == "u" then $y < $cy else $y > $cy end)'
+}
+
+if [[ "$floating" != true ]] && clients_data=$(hyprctl clients -j) && intra_workspace_move_possible >/dev/null 2>&1; then
+    hyprctl dispatch --quiet "hl.dsp.window.move({ direction = \"$hypr_direction\" })" >/dev/null
+    exit 0
+fi
+
+monitor_data=$(hyprctl monitors -j)
+read -r current_monitor_name destination_monitor destination_workspace < <(
+    orbit_adjacent_monitor "$monitor_id" "$direction" <<<"$monitor_data" 2>/dev/null || true
+)
+if [[ -n "$destination_monitor" && -n "$destination_workspace" && "$destination_workspace" != special:* ]]; then
+    move_to_workspace "$destination_workspace" "$destination_monitor"
+    exit 0
+fi
+
+# Existing workspaces are the only destinations for vertical movement. The
+# physical monitor check above is the corresponding existing-destination path
+# for horizontal movement.
+if [[ "$direction" == l || "$direction" == r ]]; then
+    # No adjacent monitor exists: this is the physical edge for horizontal
+    # navigation, so fall through to explicit edge creation below.
+    :
+else
+    mapfile -t workspaces < <(
+        hyprctl workspaces -j |
+            jq -r --arg monitor "$current_monitor_name" '.[] | select(.monitor == $monitor and (.name | test("^[0-9]+$"))) | .name' |
+            sort -n
+    )
+    index=-1
+    for i in "${!workspaces[@]}"; do [[ "${workspaces[$i]}" == "$workspace_name" ]] && index="$i"; done
+    [[ "$index" -ge 0 ]] || exit 0
+    target_index=$((index + step))
+    if (( target_index >= 0 && target_index < ${#workspaces[@]} )); then
+        move_to_workspace "${workspaces[$target_index]}"
+        exit 0
+    fi
+fi
+
+# An explicit movement key may create exactly one ordinary workspace at the
+# reached edge. Use the active workspace as the directional anchor rather
+# than treating workspace IDs as a monitor topology.
+[[ "$workspace_name" =~ ^[0-9]+$ ]] || exit 0
+candidate=$((10#$workspace_name + step))
+if (( candidate < 1 )); then
+    # Never manufacture workspace 0 or a negative workspace.
+    exit 0
+fi
+
+workspace_data=$(hyprctl workspaces -j)
+while jq -e --arg candidate "$candidate" '.[] | select(.name == $candidate)' <<<"$workspace_data" >/dev/null; do
+    candidate=$((candidate + step))
+    (( candidate >= 1 )) || exit 0
+done
+
+# Focusing a nonexistent normal workspace is the explicit Hyprland operation
+# that materializes it; the window is moved only after that succeeds.
+hyprctl dispatch --quiet \
+    "hl.dsp.focus({ workspace = \"$candidate\", monitor = \"$current_monitor_name\" })" >/dev/null
+sleep 0.05
+move_to_workspace "$candidate" "$current_monitor_name"

@@ -1,0 +1,23 @@
+# Deployed to ~/.config/noctalia/10-orbit-templates.toml by scripts/15-orbit.sh.
+#
+# Orbit's adapters read Noctalia's rendered template output, so these built-in
+# templates are required rather than cosmetic:
+#   hyprland     -> ~/.config/hypr/noctalia.lua        (orbit-theme, window borders)
+#   wezterm      -> ~/.config/wezterm/colors/Noctalia.toml (orbit-theme ANSI palette source)
+#   kcolorscheme -> ~/.local/share/color-schemes/noctalia.colors (hyprqt6engine.conf)
+#   gtk3 / gtk4  -> ~/.config/gtk-{3.0,4.0}/noctalia.css (imported by Orbit's gtk.css)
+#   qt           -> ~/.config/qt6ct/colors/noctalia.conf
+#   kitty        -> ~/.config/kitty/themes/noctalia.conf
+#   ghostty      -> ~/.config/ghostty/themes/noctalia   (Ayzrch addition: our terminal)
+[theme.templates]
+enable_builtin_templates = true
+builtin_ids = [
+  "hyprland",
+  "wezterm",
+  "kcolorscheme",
+  "gtk3",
+  "gtk4",
+  "qt",
+  "kitty",
+  "ghostty",
+]

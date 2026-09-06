@@ -1,0 +1,99 @@
+/* Keep GTK-rendered shadows inside the surface; Hyprland owns window shadows. */
+
+*:not(#orbit-shadow-exception) {
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+    filter: none;
+}
+
+/* Libadwaita draws some shadows as dedicated nodes or gradients. */
+shadow,
+undershoot {
+    background-image: none;
+    opacity: 0;
+}
+
+/* Libadwaita paints the popup surface on `contents`; keep its containers transparent. */
+popover,
+popover.background,
+popover.menu,
+popover.context-menu,
+popover > arrow {
+    background: none;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+}
+
+popover > contents {
+    background: @popover_bg_color;
+    background-color: @popover_bg_color;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+}
+
+popover > contents > box,
+popover > contents > stack,
+popover > contents > stack > box,
+popover > contents > scrolledwindow,
+popover > contents > scrolledwindow > viewport,
+popover > contents > scrolledwindow > viewport > stack,
+popover > contents > scrolledwindow > viewport > stack > box,
+popover > contents > scrolledwindow > viewport > stack > box > box,
+popover > contents > list,
+popover > contents > listview,
+popover > contents > scrolledwindow > viewport > list,
+popover > contents > scrolledwindow > viewport > listview,
+popover > contents > scrolledwindow > listview {
+    background: none;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    outline: none;
+}
+
+popover > contents modelbutton:not(:hover):not(:active):not(:checked):not(:focus),
+popover > box modelbutton:not(:hover):not(:active):not(:checked):not(:focus) {
+    background-color: transparent;
+}
+
+/* Do not leave a translucent triangular extension on popup surfaces. */
+popover > arrow {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    background: none;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    opacity: 0;
+}
+
+/* Context menus and menus opened from a header retain deliberate rounding. */
+popover.menu > contents,
+popover.context-menu > contents,
+headerbar popover.menu > contents,
+.nautilus-toolbar popover.menu > contents {
+    background: @popover_bg_color;
+    background-color: @popover_bg_color;
+    background-image: none;
+    border-radius: 12px;
+}
+
+/* Keep the Nautilus pathbar menu square so its popup surface has no halo. */
+.nautilus-pathbar > menubutton > popover > contents,
+placessidebar popover > contents,
+.navigation-sidebar popover > contents {
+    background: @popover_bg_color;
+    background-color: @popover_bg_color;
+    border-radius: 0;
+}

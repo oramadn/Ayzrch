@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Arch replacement for upstream bin/install-hyprwindowshade.
+#
+# Upstream builds against headers that hyprpm compiles into
+# /var/cache/hyprpm/$USER/headersRoot (Fedora ships no Hyprland headers).
+# Arch's hyprland package installs them under /usr/include/hyprland, so the
+# build uses pkg-config and needs neither hyprpm nor a privileged step.
+
+set -euo pipefail
+
+repo_url="https://github.com/ManofJELLO/HyprWindowShade.git"
+repo_commit="40b756befa36cfd5cbed65d554c719141a65c420"
+reference_hyprland="efb50993780079460b0cbed1363e2166a2de1d9f"
+source_dir="${XDG_CACHE_HOME:-$HOME/.cache}/hyprwindowshade/$repo_commit"
+patch_file="$HOME/.config/hypr/patches/hyprwindowshade-per-window-effects.patch"
+plugin_dir="${ORBIT_PLUGIN_DIR:-$HOME/.local/share/hyprland/plugins}"
+plugin_path="$plugin_dir/HyprWindowShade.so"
+
+command -v git >/dev/null || { printf '%s\n' 'error: git is required' >&2; exit 1; }
+command -v g++ >/dev/null || { printf '%s\n' 'error: g++ is required' >&2; exit 1; }
+command -v pkg-config >/dev/null || { printf '%s\n' 'error: pkg-config is required' >&2; exit 1; }
+
+for package in hyprland pixman-1 libdrm cairo; do
+    pkg-config --exists "$package" || {
+        printf 'error: required development package is unavailable: %s\n' "$package" >&2
+        exit 1
+    }
+done
+
+[[ -f "$patch_file" ]] || {
+    printf 'error: the Orbit patch is missing: %s\n' "$patch_file" >&2
+    printf 'Run bootstrap/deploy before building this plugin.\n' >&2
+    exit 1
+}
+
+if command -v hyprctl >/dev/null && command -v python3 >/dev/null; then
+    running_commit=$(hyprctl version -j 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))' 2>/dev/null || true)
+    if [[ -n "$running_commit" && "$running_commit" != "$reference_hyprland" ]]; then
+        printf 'warning: building HyprWindowShade for Hyprland ABI %s, not validated reference %s\n' "$running_commit" "$reference_hyprland" >&2
+    fi
+fi
+
+if [[ ! -d "$source_dir/.git" ]]; then
+    mkdir -p "${source_dir%/*}"
+    git clone --filter=blob:none "$repo_url" "$source_dir"
+fi
+
+git -C "$source_dir" fetch --quiet --depth=1 origin "$repo_commit"
+git -C "$source_dir" checkout --quiet --detach "$repo_commit"
+git -C "$source_dir" reset --quiet --hard "$repo_commit"
+[[ "$(git -C "$source_dir" rev-parse HEAD)" == "$repo_commit" ]] || {
+    printf '%s\n' 'error: HyprWindowShade checkout did not reach the pinned commit' >&2
+    exit 1
+}
+git -C "$source_dir" apply "$patch_file"
+
+# Arch's hyprland.pc already exposes the package root plus its src/ and
+# protocols/ subdirectories, which is exactly what the plugin sources include.
+mapfile -t include_flags < <(pkg-config --cflags hyprland pixman-1 libdrm cairo | tr ' ' '\n' | grep -v '^$')
+
+mkdir -p "$plugin_dir"
+(
+    cd "$source_dir"
+    g++ -shared -fPIC -O3 -std=c++23 ./*.cpp -o HyprWindowShade.so \
+        "${include_flags[@]}" \
+        -lGLESv2 -lEGL -lGL
+    install -m 0755 HyprWindowShade.so "$plugin_path"
+)
+printf '%s\n' "Installed $plugin_path for the next Hyprland session; the running compositor was not touched."

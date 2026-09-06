@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Direct Super+Arrow focus: windows, physical monitor edge, then vertical hierarchy.
+set -euo pipefail
+
+direction=${1:-}
+case "$direction" in
+    l) focus_direction=left ;;
+    r) focus_direction=right ;;
+    u) focus_direction=up; step=-1 ;;
+    d) focus_direction=down; step=1 ;;
+    *) exit 2 ;;
+esac
+
+source "$HOME/.local/lib/orbit-directional-topology.sh"
+active_window=$(hyprctl activewindow -j)
+clients=$(hyprctl clients -j)
+address=$(jq -r '.address // empty' <<<"$active_window")
+if [[ -n "$address" ]]; then
+    has_active_window=true
+    read -r workspace_name monitor_id _ active_x active_y active_w active_h < <(
+        jq -r '[.workspace.name, .monitor, .address, .at[0], .at[1], .size[0], .size[1]] | @tsv' <<<"$active_window"
+    )
+else
+    # Empty Home is still a valid navigation source; use workspace state when
+    # there is no active client to provide monitor/workspace context.
+    has_active_window=false
+    active_x=0; active_y=0; active_w=0; active_h=0
+    active_workspace=$(hyprctl activeworkspace -j)
+    read -r workspace_name monitor_name monitor_id < <(
+        jq -r '[.name // "", .monitor // "", .monitorID // ""] | @tsv' <<<"$active_workspace"
+    )
+fi
+[[ -n "$workspace_name" && -n "$monitor_id" ]] || exit 0
+
+has_target=false
+if [[ "$has_active_window" == true ]]; then
+    has_target=$(jq -n --arg direction "$direction" --arg address "$address" \
+    --arg workspace "$workspace_name" --argjson monitor "$monitor_id" \
+    --argjson ax "$active_x" --argjson ay "$active_y" --argjson aw "$active_w" --argjson ah "$active_h" \
+    --argjson clients "$clients" '
+    any($clients[]; .mapped and (.hidden | not) and .address != $address
+        and .workspace.name == $workspace and .monitor == $monitor
+        and ((.at[0] + .size[0] / 2) as $x | (.at[1] + .size[1] / 2) as $y |
+            ($ax + $aw / 2) as $cx | ($ay + $ah / 2) as $cy |
+            if $direction == "l" then $x < $cx elif $direction == "r" then $x > $cx
+            elif $direction == "u" then $y < $cy else $y > $cy end))')
+fi
+if [[ "$has_target" == true ]]; then
+    hyprctl dispatch --quiet "hl.dsp.focus({ direction = \"$focus_direction\" })" >/dev/null
+    exit 0
+fi
+
+monitor_data=$(hyprctl monitors -j)
+read -r current_monitor_name destination_monitor _ < <(
+    orbit_adjacent_monitor "$monitor_id" "$direction" <<<"$monitor_data" 2>/dev/null || true
+)
+physical_edge=false
+if [[ "$has_active_window" == true ]]; then
+    physical_edge=$(jq -n --arg direction "$direction" --argjson monitor "$monitor_id" \
+        --argjson ax "$active_x" --argjson ay "$active_y" --argjson aw "$active_w" --argjson ah "$active_h" \
+        --argjson monitors "$monitor_data" '
+        first($monitors[] | select(.id == $monitor)) as $m |
+        if $direction == "l" then ($ax <= ($m.x + 8))
+        elif $direction == "r" then (($ax + $aw) >= ($m.x + $m.width - 8))
+        elif $direction == "u" then ($ay <= ($m.y + 8))
+        else (($ay + $ah) >= ($m.y + $m.height - 8)) end')
+fi
+
+if [[ "$direction" == l || "$direction" == r ]]; then
+    if [[ -n "$destination_monitor" ]]; then
+        hyprctl dispatch --quiet "hl.dsp.focus({ monitor = \"$destination_monitor\" })" >/dev/null
+    fi
+    exit 0
+fi
+
+if [[ "$physical_edge" == true && -n "$destination_monitor" ]]; then
+    # Vertical monitor crossing requires both physical adjacency and the
+    # focused client actually reaching the corresponding monitor edge.
+    hyprctl dispatch --quiet "hl.dsp.focus({ monitor = \"$destination_monitor\" })" >/dev/null
+    exit 0
+fi
+
+if [[ "$direction" == u || "$direction" == d ]]; then
+    # Explicit navigation may cycle through existing normal workspaces, but
+    # never creates one or consults application ownership state.
+    mapfile -t workspaces < <(
+        hyprctl workspaces -j |
+            jq -r --arg monitor "$current_monitor_name" '.[] | select(.monitor == $monitor and (.name | startswith("special:") | not)) | .name' |
+            sort -n
+    )
+    count=${#workspaces[@]}
+    if (( count > 0 )); then
+        index=-1
+        for i in "${!workspaces[@]}"; do
+            [[ "${workspaces[$i]}" == "$workspace_name" ]] && index="$i"
+        done
+        if (( index >= 0 )); then
+            target_index=$((index + step))
+            (( target_index >= 0 )) || target_index=$((count - 1))
+            (( target_index < count )) || target_index=0
+            target_workspace="${workspaces[$target_index]}"
+            hyprctl dispatch --quiet "hl.dsp.focus({ workspace = \"$target_workspace\" })" >/dev/null
+            # A separate monitor focus is required when the target is empty Home.
+            hyprctl dispatch --quiet "hl.dsp.focus({ monitor = \"$current_monitor_name\" })" >/dev/null
+            exit 0
+        fi
+    fi
+fi
+
+if [[ -n "$destination_monitor" ]]; then
+    # focusmonitor follows the monitor's existing active workspace, including empty Home.
+    hyprctl dispatch --quiet "hl.dsp.focus({ monitor = \"$destination_monitor\" })" >/dev/null
+fi

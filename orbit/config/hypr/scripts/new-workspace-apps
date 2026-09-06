@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Allocate a normal workspace only for the explicit new-workspace allowlist.
+set -u
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+signature="${HYPRLAND_INSTANCE_SIGNATURE:-$(hyprctl instances -j 2>/dev/null | jq -r '.[0].instance // empty')}"
+socket="$runtime_dir/hypr/$signature/.socket2.sock"
+lock_dir="${XDG_RUNTIME_DIR}/hypr-new-workspace-apps"
+mkdir -p "$lock_dir"
+
+is_allowlisted() {
+    case "$1" in
+        zen|dev.zed.Zed) return 0 ;;
+        affinity.exe) [[ "${2:-}" == "Affinity" ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+place_window() {
+    local address="$1" origin_workspace="$2" workspace="" client target
+    sleep 0.05
+    address="0x${address#0x}"
+    client="$(hyprctl clients -j 2>/dev/null | jq -c --arg address "$address" \
+        'first(.[] | select(.address == $address)) // empty')"
+    [[ -n "$client" ]] || return 0
+
+    [[ -n "$origin_workspace" && "$origin_workspace" != special:* ]] &&
+        hyprctl dispatch --quiet "hl.dsp.focus({ workspace = \"$origin_workspace\" })" >/dev/null 2>&1 || true
+
+    # Choose the next numeric workspace, create/focus it, then move the window.
+    # This allocation exists only inside the allowlisted application path.
+    target="$(hyprctl workspaces -j 2>/dev/null | jq -r '
+        [.[] | select((.name // "") | test("^[0-9]+$")) | (.name | tonumber)]
+        | max // 0' 2>/dev/null)"
+    [[ "$target" =~ ^[0-9]+$ ]] || return 0
+    target=$((target + 1))
+    hyprctl dispatch --quiet "hl.dsp.focus({ workspace = \"$target\" })" >/dev/null 2>&1 || return 0
+    workspace="$(hyprctl activeworkspace -j 2>/dev/null | jq -r '.name // empty')"
+    [[ -n "$workspace" && "$workspace" != special:* ]] || return 0
+    hyprctl dispatch --quiet \
+        "hl.dsp.window.move({ workspace = \"$workspace\", follow = true, window = \"address:$address\" })" \
+        >/dev/null 2>&1 || true
+}
+
+while :; do
+    while IFS= read -r event; do
+        case "$event" in
+        openwindow\>\>* )
+            payload="${event#openwindow>>}"
+            address="${payload%%,*}"
+            payload="${payload#*,}"
+            workspace="${payload%%,*}"
+            payload="${payload#*,}"
+            class="${payload%%,*}"
+            payload="${payload#*,}"
+            title="${payload%%,*}"
+            is_allowlisted "$class" "$title" || continue
+            # Per-window locking prevents concurrent allowlisted launches from
+            # selecting the same newly-created workspace.
+            (
+                exec 9>"$lock_dir/allocate.lock"
+                flock -x 9
+                place_window "$address" "$workspace"
+            ) &
+            ;;
+        esac
+    done < <(timeout 0.5s socat -u "UNIX-CONNECT:$socket" - 2>/dev/null)
+done
