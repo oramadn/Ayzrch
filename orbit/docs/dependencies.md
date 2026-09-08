@@ -10,7 +10,10 @@ the intended dependency boundary, not an inventory of one machine.
   `quickshell`;
 - `xdg-desktop-portal` and `xdg-desktop-portal-hyprland`;
 - GTK3/GTK4, Qt6/KDE runtime libraries, systemd user sessions, Wayland, and
-  Kora icons or another available icon theme;
+  an available icon theme. Orbit is configured for `papirus-icon-theme`
+  (`extra`) plus `papirus-folders` (AUR; `arch/install-papirus-folders`),
+  which `bin/orbit-theme` uses to recolor Papirus folders to the live
+  Noctalia accent on every apply;
 - `nwg-displays` for the machine-local monitor layout;
 - `bash`, `python3`, `python3-pyudev`, `jq`, `socat`, `util-linux-core`,
   `shadow-utils`, `procps-ng`, `grim`, `slurp`, `wl-clipboard`, `zenity`,

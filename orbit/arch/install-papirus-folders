@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Install papirus-folders, used by bin/orbit-theme to recolor Papirus folder
+# icons to the live Noctalia accent. It has no official Arch package; build it
+# from the AUR.
+
+set -euo pipefail
+
+if command -v papirus-folders >/dev/null 2>&1; then
+    printf 'papirus-folders is already installed: %s\n' "$(command -v papirus-folders)"
+    exit 0
+fi
+
+for dependency in git makepkg; do
+    command -v "$dependency" >/dev/null || { printf 'error: %s is required\n' "$dependency" >&2; exit 1; }
+done
+
+work_dir=$(mktemp -d)
+trap 'rm -rf "$work_dir"' EXIT
+
+git clone --depth 1 https://aur.archlinux.org/papirus-folders.git "$work_dir/papirus-folders"
+(cd "$work_dir/papirus-folders" && makepkg -si --noconfirm)
+
+printf 'Installed %s\n' "$(command -v papirus-folders)"

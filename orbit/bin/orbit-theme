@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import json
 import math
 import os
@@ -58,7 +59,7 @@ DEFAULT_TYPOGRAPHY = {
     "monospace": {"family": "JetBrains Mono", "size": 10.0},
 }
 DEFAULT_RESOURCES = {
-    "icons": {"theme": "kora"},
+    "icons": {"theme": "Papirus-Dark"},
     "cursor": {"theme": "default", "size": 24},
 }
 
@@ -820,6 +821,80 @@ FLATPAK_ICON_BRIDGE_APPS = (
 )
 
 
+PAPIRUS_FOLDER_COLORS = {
+    "black": "#4f4f4f",
+    "blue": "#5294e2",
+    "bluegrey": "#607d8b",
+    "breeze": "#57b8ec",
+    "brown": "#ae8e6c",
+    "carmine": "#a30002",
+    "cyan": "#00bcd4",
+    "darkcyan": "#45abb7",
+    "deeporange": "#eb6637",
+    "green": "#87b158",
+    "grey": "#8e8e8e",
+    "indigo": "#5c6bc0",
+    "magenta": "#ca71df",
+    "nordic": "#81a1c1",
+    "orange": "#ee923a",
+    "palebrown": "#d1bfae",
+    "paleorange": "#eeca8f",
+    "pink": "#f06292",
+    "red": "#e25252",
+    "teal": "#16a085",
+    "violet": "#7e57c2",
+    "white": "#cccccc",
+    "yaru": "#676767",
+    "yellow": "#f9bd30",
+}
+
+
+PAPIRUS_NEUTRAL_FOLDER_COLORS = {"black", "white", "grey"}
+
+
+def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
+    return tuple(int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5))
+
+
+def nearest_papirus_folder_color(accent: str) -> str:
+    hue, lightness, saturation = colorsys.rgb_to_hls(*_hex_to_rgb01(accent))
+    if saturation < 0.12:
+        # A near-grayscale accent has no meaningful hue to match on; go by
+        # lightness against the achromatic swatches instead.
+        candidates = PAPIRUS_NEUTRAL_FOLDER_COLORS
+
+        def score(name: str) -> float:
+            _, candidate_lightness, _ = colorsys.rgb_to_hls(*_hex_to_rgb01(PAPIRUS_FOLDER_COLORS[name]))
+            return abs(candidate_lightness - lightness)
+    else:
+        # Papirus's swatches sit at one mid saturation/lightness per hue, so
+        # matching on RGB distance collapses light pastel accents onto
+        # "white"/"grey". Match on hue alone instead.
+        candidates = set(PAPIRUS_FOLDER_COLORS) - PAPIRUS_NEUTRAL_FOLDER_COLORS
+
+        def score(name: str) -> float:
+            candidate_hue, _, _ = colorsys.rgb_to_hls(*_hex_to_rgb01(PAPIRUS_FOLDER_COLORS[name]))
+            diff = abs(candidate_hue - hue)
+            return min(diff, 1 - diff)
+
+    return min(candidates, key=score)
+
+
+def update_papirus_folder_color(theme: str, accent: str) -> None:
+    """Recolor Papirus folders to the nearest swatch for the live accent."""
+    if not theme.lower().startswith("papirus") or not shutil.which("papirus-folders"):
+        return
+    color = nearest_papirus_folder_color(accent)
+    result = subprocess.run(
+        ["papirus-folders", "-C", color, "-t", theme, "-o", "-u"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or f"Could not recolor Papirus folders for {theme}")
+
+
 def update_flatpak_icon_bridges(resources: dict) -> None:
     """Refresh only the Flatpak bridges already configured by Orbit helpers."""
     flatpak = shutil.which("flatpak")
@@ -855,6 +930,8 @@ def update_flatpak_icon_bridges(resources: dict) -> None:
 def install_active_typography_adapters(palette_name: str, typography: dict | None = None) -> None:
     typography = typography or typography_settings()
     resources = resource_settings()
+    _, _, colors = load_palette(palette_name)
+    values = semantic(colors)
     install_active_gtk(palette_name)
     update_gtk_font_setting(HOME / ".config/gtk-3.0/settings.ini", typography["body"]["family"], typography["body"]["size"])
     update_gtk_font_setting(HOME / ".config/gtk-4.0/settings.ini", typography["body"]["family"], typography["body"]["size"])
@@ -867,9 +944,11 @@ def install_active_typography_adapters(palette_name: str, typography: dict | Non
     update_qt6ct_fonts(HOME / ".config/qt6ct/qt6ct.conf", typography)
     update_qt6ct_resources(HOME / ".config/qt6ct/qt6ct.conf", resources)
     write_atomic(HOME / ".config/kdeglobals", kdeglobals_content(typography, resources))
+    write_atomic(HOME / ".local/share/color-schemes/noctalia.colors", kde_scheme(values))
     write_atomic(HOME / ".config/Trolltech.conf", trolltech_content(typography))
     write_atomic(KITTY_ACTIVE, (generated / "kitty.conf").read_text())
     update_wezterm_font_settings(WEZTERM_CONFIG_ACTIVE, typography)
+    update_papirus_folder_color(resources["icons"]["theme"], values["accent"])
 
 
 def install_active_resource_adapters(palette_name: str, resources: dict | None = None) -> None:
@@ -885,6 +964,8 @@ def install_active_resource_adapters(palette_name: str, resources: dict | None =
     update_qt6ct_resources(HOME / ".config/qt6ct/qt6ct.conf", resources)
     write_atomic(HOME / ".config/kdeglobals", kdeglobals_content(typography, resources))
     update_flatpak_icon_bridges(resources)
+    _, _, colors = load_palette(palette_name)
+    update_papirus_folder_color(resources["icons"]["theme"], semantic(colors)["accent"])
 
 
 def update_wezterm_font_settings(path: Path, typography: dict) -> None:

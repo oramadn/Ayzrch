@@ -3,7 +3,7 @@ button_shape = "rounded"
 corner_radius = 11
 
 [icons]
-theme = "kora"
+theme = "Papirus-Dark"
 
 [cursor]
 theme = "oblique-cursor"
