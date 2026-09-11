@@ -173,11 +173,15 @@ fi
 build_plugins
 
 # ------------------------------------------------------------------------------
-# 9. Wallpaper Engine (separate GPL-3.0 project, built from its pinned tag)
+# 9. Wallpaper Engine — REMOVED
 # ------------------------------------------------------------------------------
-echo ":: Installing Orbit Wallpaper Engine..."
-ORBIT_WALLPAPER_REPO_URL=https://github.com/CleanShirtUK/orbit-wallpaper-engine.git \
-    "$ORBIT_DIR/bin/dotfiles-install-wallpaper"
+# The Orbit Wallpaper Engine (EGL/GPU surface) deadlocked on NVIDIA explicit-sync
+# fences. Wallpapers are now rendered by awww (CPU shm) via scripts/17-awww-wallpaper.sh
+# (see docs/awww-live-wallpaper.md). Do not re-enable this block.
+#
+# echo ":: Installing Orbit Wallpaper Engine..."
+# ORBIT_WALLPAPER_REPO_URL=https://github.com/CleanShirtUK/orbit-wallpaper-engine.git \
+#     "$ORBIT_DIR/bin/dotfiles-install-wallpaper"
 
 
 # ------------------------------------------------------------------------------
@@ -197,6 +201,8 @@ cat <<'EOF'
       Workspaces are then assigned to connected monitors automatically at login.
    4. Run scripts/16-orbit-integrations.sh for Zen theming, LocalSend and
       GPU Screen Recorder.
+   5. Run scripts/17-awww-wallpaper.sh so awww renders wallpapers (NVIDIA-safe).
+      Noctalia keeps the picker; awww renders the pixels.
 
    After a Hyprland upgrade, rebuild the plugins: scripts/15-orbit.sh --plugins-only
 EOF

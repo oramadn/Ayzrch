@@ -1,0 +1,14 @@
+[Unit]
+Description=awww wallpaper daemon
+PartOf=hyprland-session.target
+After=graphical-session-pre.target
+
+[Service]
+# Default format (argb) and layer (background). awww restores the last
+# wallpaper per output from its own cache at start, so login needs no extra step.
+ExecStart=/usr/bin/awww-daemon --quiet
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=hyprland-session.target

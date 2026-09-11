@@ -1,0 +1,11 @@
+# awww owns wallpaper rendering. Noctalia keeps the picker and palette
+# generation. If the picker disappears with enabled = false, see "Fallback"
+# in docs/awww-live-wallpaper.md.
+[wallpaper]
+enabled = false
+# Picker folder: left unset so Noctalia uses the XDG Pictures directory
+# (~/Pictures). Set `directory = "/abs/path"` here or in the GUI (which writes
+# ~/.local/state/noctalia/settings.toml, loaded last) to change it.
+
+[hooks]
+wallpaper_changed = "sh -c '~/.local/bin/awww-noctalia-hook'"
