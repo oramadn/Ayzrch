@@ -27,3 +27,8 @@ Noctalia outputs
           -> semantic.json and active Orbit adapters
           -> Hyprlock adapter
 ```
+
+`semantic.json` is a live input as well as an output: the QuickShell surfaces
+read it through `ThemeAdapter`, alongside `config/hypr/appearance.toml` for shape
+and typography. Both are watched, so the global menu and the keyboard cheatsheet
+repaint with the rest of the desktop when the palette changes.

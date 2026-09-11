@@ -21,6 +21,10 @@ local workspaceAltTab = home .. "/.local/bin/workspace-alt-tab"
 local moveWindowWorkspace = scripts .. "/move-window-workspace"
 local focusWorkspace = scripts .. "/focus-workspace"
 local focusDirectional = scripts .. "/focus-directional"
+-- The executable is supplied by PATH, or by ORBIT_QUICKSHELL when a local
+-- installation is not on the graphical session PATH.
+local quickshellBinary = os.getenv("ORBIT_QUICKSHELL") or "quickshell"
+local cheatsheetToggle = quickshellBinary .. " -c global-menu ipc call cheatsheet toggle"
 
 -- Modifier key for all Hyprland keybindings.
 local mainMod = "SUPER"
@@ -138,10 +142,8 @@ hl.on("hyprland.start", function()
     hl.exec_cmd("/usr/bin/noctalia &")
 
     -- Start the global-menu frontend after the Wayland compositor is ready.
-    -- The executable is supplied by PATH, or by ORBIT_QUICKSHELL when a local
-    -- installation is not on the graphical session PATH.
-    local quickshell = os.getenv("ORBIT_QUICKSHELL") or "quickshell"
-    hl.exec_cmd(quickshell .. " --config global-menu --no-duplicate &")
+    -- It also hosts the keyboard cheatsheet overlay.
+    hl.exec_cmd(quickshellBinary .. " --config global-menu --no-duplicate &")
 
     -- Explicit orbit-game-run sessions own game-mode policy.
 
@@ -363,62 +365,86 @@ hl.animation({ leaf = "workspacesOut", enabled = orbitAppearance.effects.animati
 -- Zoom factor: used for workspace overview or active indicator scaling.
 hl.animation({ leaf = "zoomFactor", enabled = true, speed = 7, bezier = "quick" })
 
+-- Cheatsheet metadata. A description travels into `hyprctl binds -j`, which is
+-- the only source the Quickshell cheatsheet reads, so a bind documents itself
+-- exactly once and the overlay can never drift from the live configuration.
+-- Binds sharing a group and label are merged into a single overlay row, which is
+-- what collapses the directional and workspace loops below into one line each.
+-- An undescribed bind is deliberately absent from the cheatsheet.
+local function noted(group, label, options)
+    local spec = { description = group .. " | " .. label }
+    for key, value in pairs(options or {}) do spec[key] = value end
+    return spec
+end
+
 -- Keybindings (main modifier: Super key)
 -- Application launchers
-hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd(terminal))         -- Open terminal (ghostty).
-hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))           -- Open file manager (nautilus).
-hl.bind(mainMod .. " + A", hl.dsp.exec_cmd(chatGPT))               -- Open ChatGPT.
-hl.bind(mainMod .. " + Space", hl.dsp.exec_cmd(launcher))          -- Open the Noctalia launcher.
-hl.bind("ALT + TAB", hl.dsp.exec_cmd(workspaceAltTab .. " cycle")) -- Workspace-oriented ScrollOverview switcher.
+hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd(terminal), noted("Applications", "Terminal"))
+hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager), noted("Applications", "File manager"))
+hl.bind(mainMod .. " + A", hl.dsp.exec_cmd(chatGPT), noted("Applications", "ChatGPT"))
+hl.bind(mainMod .. " + Space", hl.dsp.exec_cmd(launcher), noted("Applications", "Launcher"))
+hl.bind("ALT + TAB", hl.dsp.exec_cmd(workspaceAltTab .. " cycle"),
+    noted("Workspaces", "Overview")) -- Workspace-oriented ScrollOverview switcher.
 
 -- Window management
-hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd(workspaceAltTab .. " close"))                 -- Close ScrollOverview if open.
-hl.bind(mainMod .. " + C", hl.dsp.window.close())                                             -- Close active window.
-hl.bind(mainMod .. " + Q", hl.dsp.window.close())                                             -- Close active window (Ayzrch).
-hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))                        -- Toggle float/tile for active window.
-hl.bind("ALT + Return", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" })) -- Toggle fullscreen.
+hl.bind(mainMod .. " + Escape", hl.dsp.exec_cmd(workspaceAltTab .. " close"),
+    noted("Workspaces", "Close overview"))
+hl.bind(mainMod .. " + C", hl.dsp.window.close(), noted("Windows", "Close window"))
+hl.bind(mainMod .. " + Q", hl.dsp.window.close(), noted("Windows", "Close window"))
+hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }), noted("Windows", "Toggle floating"))
+hl.bind("ALT + Return", hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" }),
+    noted("Windows", "Fullscreen"))
 
 -- Session control
-hl.bind(mainMod .. " + L", hl.dsp.exec_cmd(animateLock))     -- Lock screen with animation.
-hl.bind(mainMod .. " + M", hl.dsp.exec_cmd(animateShutdown)) -- Shutdown session with animation.
+hl.bind(mainMod .. " + L", hl.dsp.exec_cmd(animateLock), noted("Session", "Lock screen"))
+hl.bind(mainMod .. " + M", hl.dsp.exec_cmd(animateShutdown), noted("Session", "Power off"))
 
 -- Screenshots and recording
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd([[grim -g "$(slurp)" - | satty --filename -]])) -- Screenshot (select region, annotate in satty).
-hl.bind(mainMod .. " + SHIFT + R", hl.dsp.exec_cmd(gpuScreenRecorder .. " record"))                      -- Start GPU screen recording.
-hl.bind(mainMod .. " + SHIFT + Z", hl.dsp.exec_cmd(gpuScreenRecorder .. " replay"))                      -- Save instant replay (last 30s).
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd([[grim -g "$(slurp)" - | satty --filename -]]),
+    noted("Capture", "Screenshot region")) -- Select region, annotate in satty.
+hl.bind(mainMod .. " + SHIFT + R", hl.dsp.exec_cmd(gpuScreenRecorder .. " record"),
+    noted("Capture", "Record screen"))
+hl.bind(mainMod .. " + SHIFT + Z", hl.dsp.exec_cmd(gpuScreenRecorder .. " replay"),
+    noted("Capture", "Save instant replay")) -- Last 30s.
 
 -- System monitoring
-hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("flatpak run io.missioncenter.MissionCenter")) -- Open Mission Center (system monitor).
+hl.bind("CTRL + SHIFT + Escape", hl.dsp.exec_cmd("flatpak run io.missioncenter.MissionCenter"),
+    noted("Session", "System monitor"))
 
 -- Placement diagnostics
 
 -- Directional focus shares monitor geometry with Super+Shift+Arrow movement.
-for key, direction in pairs({ left = "l", right = "r", up = "u", down = "d" }) do
-    hl.bind(mainMod .. " + " .. key, hl.dsp.exec_cmd(focusDirectional .. " " .. direction))
+-- The loops below are ordered so the cheatsheet merges them as left/down/up/right.
+for _, entry in ipairs({ { "left", "l" }, { "down", "d" }, { "up", "u" }, { "right", "r" } }) do
+    hl.bind(mainMod .. " + " .. entry[1], hl.dsp.exec_cmd(focusDirectional .. " " .. entry[2]),
+        noted("Windows", "Move focus"))
 end
 
 -- Scroll wheel on window also focuses vertically (when mouse is over the window).
-for key, direction in pairs({ mouse_up = "u", mouse_down = "d" }) do
-    hl.bind(mainMod .. " + " .. key, hl.dsp.exec_cmd(focusWorkspace .. " " .. direction), { mouse = true })
+for _, entry in ipairs({ { "mouse_up", "u" }, { "mouse_down", "d" } }) do
+    hl.bind(mainMod .. " + " .. entry[1], hl.dsp.exec_cmd(focusWorkspace .. " " .. entry[2]),
+        noted("Mouse", "Change workspace", { mouse = true }))
 end
 
 -- One directional dispatcher handles intra-workspace movement, monitor edges,
 -- and workspace-hierarchy edges for all four arrows.
-for key, direction in pairs({ left = "l", right = "r", up = "u", down = "d" }) do
-    hl.bind(mainMod .. " + SHIFT + " .. key, hl.dsp.exec_cmd(moveWindowWorkspace .. " " .. direction),
-        { repeating = true })
+for _, entry in ipairs({ { "left", "l" }, { "down", "d" }, { "up", "u" }, { "right", "r" } }) do
+    hl.bind(mainMod .. " + SHIFT + " .. entry[1], hl.dsp.exec_cmd(moveWindowWorkspace .. " " .. entry[2]),
+        noted("Windows", "Move window", { repeating = true }))
 end
 
 -- Resize active window: SUPER + CTRL + arrow keys. Repeating = hold to continuously resize.
 -- Delta values: ±40 pixels per key press (relative resizing).
-for key, delta in pairs({
-    left = { x = -40, y = 0 }, -- Shrink width.
-    right = { x = 40, y = 0 }, -- Grow width.
-    up = { x = 0, y = -40 },   -- Shrink height.
-    down = { x = 0, y = 40 },  -- Grow height.
+for _, entry in ipairs({
+    { "left",  { x = -40, y = 0 } }, -- Shrink width.
+    { "down",  { x = 0, y = 40 } },  -- Grow height.
+    { "up",    { x = 0, y = -40 } }, -- Shrink height.
+    { "right", { x = 40, y = 0 } },  -- Grow width.
 }) do
-    hl.bind(mainMod .. " + CTRL + " .. key, hl.dsp.window.resize({ x = delta.x, y = delta.y, relative = true }),
-        { repeating = true })
+    local delta = entry[2]
+    hl.bind(mainMod .. " + CTRL + " .. entry[1],
+        hl.dsp.window.resize({ x = delta.x, y = delta.y, relative = true }),
+        noted("Windows", "Resize window", { repeating = true }))
 end
 
 -- Ayzrch additions
@@ -427,24 +453,38 @@ end
 -- with that, and workspace 1/6/11... remain each monitor's Home.
 for index = 1, 10 do
     local key = tostring(index % 10)
-    hl.bind(mainMod .. " + " .. key, hl.dsp.focus({ workspace = index }))
-    hl.bind(mainMod .. " + SHIFT + " .. key, hl.dsp.window.move({ workspace = index }))
+    hl.bind(mainMod .. " + " .. key, hl.dsp.focus({ workspace = index }),
+        noted("Workspaces", "Switch to workspace"))
+    hl.bind(mainMod .. " + SHIFT + " .. key, hl.dsp.window.move({ workspace = index }),
+        noted("Workspaces", "Send to workspace"))
 end
 
 -- Scratchpad special workspace.
-hl.bind(mainMod .. " + grave", hl.dsp.workspace.toggle_special("magic"))
-hl.bind(mainMod .. " + SHIFT + grave", hl.dsp.window.move({ workspace = "special:magic" }))
+hl.bind(mainMod .. " + grave", hl.dsp.workspace.toggle_special("magic"),
+    noted("Workspaces", "Toggle scratchpad"))
+hl.bind(mainMod .. " + SHIFT + grave", hl.dsp.window.move({ workspace = "special:magic" }),
+    noted("Workspaces", "Send to scratchpad"))
 
 -- Maximize. Alt+Return remains true fullscreen.
-hl.bind(mainMod .. " + F", hl.dsp.window.fullscreen({ mode = "maximized", action = "toggle" }))
+hl.bind(mainMod .. " + F", hl.dsp.window.fullscreen({ mode = "maximized", action = "toggle" }),
+    noted("Windows", "Maximize"))
 
 -- Browser profiles. Zen registers these in ~/.config/zen/profiles.ini.
-hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("zen-browser -P Personal"))          -- Personal profile.
-hl.bind(mainMod .. " + SHIFT + B", hl.dsp.exec_cmd("zen-browser -P Work"))      -- Work profile.
+hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("zen-browser -P Personal"),
+    noted("Applications", "Browser (Personal)"))
+hl.bind(mainMod .. " + SHIFT + B", hl.dsp.exec_cmd("zen-browser -P Work"),
+    noted("Applications", "Browser (Work)"))
 
 -- Utilities.
-hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("noctalia msg panel-toggle launcher /emo")) -- Emoji picker.
-hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("hyprpicker -a"))                -- Colour picker to clipboard.
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("noctalia msg panel-toggle launcher /emo"),
+    noted("Applications", "Emoji picker"))
+hl.bind(mainMod .. " + SHIFT + C", hl.dsp.exec_cmd("hyprpicker -a"),
+    noted("Capture", "Colour picker")) -- Copies the picked colour to the clipboard.
+
+-- Keyboard cheatsheet. The overlay lives in the Quickshell instance that already
+-- serves the global menu, so this only has to nudge it over IPC.
+hl.bind(mainMod .. " + slash", hl.dsp.exec_cmd(cheatsheetToggle),
+    noted("Session", "Keyboard shortcuts"))
 
 -- Audio, media and brightness keys. `repeating` holds to repeat; `locked` keeps
 -- them working while the lock screen is up.
@@ -460,8 +500,10 @@ hl.bind("XF86AudioPause", hl.dsp.exec_cmd("playerctl play-pause"), { locked = tr
 hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl previous"), { locked = true })
 
 -- Mouse-based window management
-hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })   -- SUPER + left-click-drag: move window.
-hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true }) -- SUPER + right-click-drag: resize window.
+hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(),
+    noted("Mouse", "Drag window", { mouse = true }))
+hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(),
+    noted("Mouse", "Drag to resize", { mouse = true }))
 
 -- Double-click window title bar to toggle float/tile (uses toggle-float-double-click script).
 hl.bind("mouse:272", hl.dsp.exec_cmd(scripts .. "/toggle-float-double-click"), { mouse = true })

@@ -10,7 +10,12 @@ that have an active consumer, including GTK presentation/opacity, Kitty, and
 Hyprlock.
 
 Hyprland starts Noctalia, the global-menu QuickShell configuration, and
-`orbit-session-bootstrap`. The bootstrap imports the graphical environment,
+`orbit-session-bootstrap`. The global-menu configuration also hosts the keyboard
+cheatsheet overlay, which Hyprland toggles over IPC on Super+/. That overlay is
+rendered entirely from `hyprctl binds -j`: a bind appears in it when, and only
+when, it carries a `"Group | Label"` description in `config/hypr/hyprland.lua`,
+so the compositor configuration remains the single source and the overlay cannot
+drift from it. The bootstrap imports the graphical environment,
 assigns semantic Home workspaces to monitors discovered from live Hyprland
 state, starts the session target, performs the session transition, and repairs
 the portal binding.

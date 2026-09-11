@@ -7,6 +7,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tomllib
 import unittest
@@ -77,7 +78,13 @@ class CurrentArchitectureTests(unittest.TestCase):
         hyprland = (HYPR / "hyprland.lua").read_text()
         self.assertIn('hl.exec_cmd("/usr/bin/noctalia &")', hyprland)
         self.assertIn(
-            'quickshell .. " --config global-menu --no-duplicate &"',
+            'quickshellBinary .. " --config global-menu --no-duplicate &"',
+            hyprland,
+        )
+        # The cheatsheet reaches the same instance, so both must resolve the
+        # executable the same way.
+        self.assertIn(
+            'quickshellBinary .. " -c global-menu ipc call cheatsheet toggle"',
             hyprland,
         )
         self.assertNotIn("orbit-shell", hyprland)
@@ -89,7 +96,24 @@ class CurrentArchitectureTests(unittest.TestCase):
         self.assertIn("ApplicationActionsSurface", source)
         self.assertIn("MenuSurface", source)
         self.assertIn("noctalia-global-menu-anchor", source)
+        self.assertIn("CheatsheetSurface", source)
+        self.assertIn("orbit-cheatsheet", source)
         self.assertNotIn("quickshell/orbit", source)
+
+    def test_shell_theme_reads_live_orbit_inputs(self):
+        # The shell tracks the palette orbit-theme generates and Orbit's own
+        # appearance policy. A stale path here silently falls back to built-in
+        # colours, which is how the surfaces stop matching the desktop.
+        adapter = (GLOBAL_MENU / "ThemeAdapter.qml").read_text()
+        self.assertIn("/.config/orbit/generated/noctalia/semantic.json", adapter)
+        self.assertIn("/.config/hypr/appearance.toml", adapter)
+
+    def test_described_binds_carry_a_cheatsheet_group(self):
+        # Every description is what the cheatsheet renders, so the separator the
+        # overlay splits on has to be present in all of them.
+        hyprland = (HYPR / "hyprland.lua").read_text()
+        for match in re.findall(r'description = ([^\n]+)', hyprland):
+            self.assertIn('" | "', match)
 
     def test_removed_architecture_is_not_required(self):
         removed = (
