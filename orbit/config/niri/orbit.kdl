@@ -328,9 +328,35 @@ layer-rule {
     }
 }
 
-// Noctalia paints its own background; blurring behind it double-blurs the bar.
+// Noctalia's translucent surfaces. 90-orbit-glass.toml puts the dock,
+// notifications and the OSD at 0.7 opacity and the panel in "glass" mode, so
+// each of them is counting on something blurred behind it to stay legible —
+// which is what the launcher gets from Hyprland's global blur.
+//
+// Every namespace is anchored. `^noctalia-panel` unanchored would also match
+// noctalia-panel-click-shield, the full-screen transparent surface the panel
+// puts down to catch outside clicks, and blurring that blurs the whole screen.
 layer-rule {
-    match namespace=r#"^noctalia-"#
+    match namespace=r#"^noctalia-panel$"#
+    match namespace=r#"^noctalia-attached-panel$"#
+    match namespace=r#"^noctalia-dock$"#
+    match namespace=r#"^noctalia-notification$"#
+    match namespace=r#"^noctalia-osd$"#
+    match namespace=r#"^noctalia-window-switcher$"#
+
+    background-effect {
+        blur true
+        xray false
+        noise 0.03
+        saturation 1.3
+    }
+}
+
+// The bar paints an opaque background of its own, so blurring behind it only
+// costs a pass. The click shield must never be blurred, per above.
+layer-rule {
+    match namespace=r#"^noctalia-bar"#
+    match namespace=r#"^noctalia-panel-click-shield$"#
     match namespace=r#"^orbit-top-panel$"#
 
     background-effect {
