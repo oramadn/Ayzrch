@@ -100,7 +100,30 @@ return {
             },
           },
         },
-        tailwindcss = {},
+        tailwindcss = {
+          root_dir = function(bufnr, on_dir)
+            local fname = vim.api.nvim_buf_get_name(bufnr)
+            local cfg = vim.fs.find({
+              'tailwind.config.js',
+              'tailwind.config.cjs',
+              'tailwind.config.mjs',
+              'tailwind.config.ts',
+              'postcss.config.js',
+              'postcss.config.cjs',
+              'postcss.config.mjs',
+              'postcss.config.ts',
+              'package.json',
+            }, { path = fname, upward = true })[1]
+            if cfg then
+              return on_dir(vim.fs.dirname(cfg))
+            end
+            -- Tailwind v4 has no config file; root at the dir holding the stylesheet tree, never at .git
+            local styles = vim.fs.find('styles', { path = fname, upward = true, type = 'directory' })[1]
+            if styles then
+              on_dir(vim.fs.dirname(styles))
+            end
+          end,
+        },
         eslint = {
           settings = {
             workingDirectories = { mode = 'auto' },

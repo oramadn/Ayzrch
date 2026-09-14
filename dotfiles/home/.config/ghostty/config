@@ -1,5 +1,5 @@
-font-family = "DejaVu Mono"
-font-size = 16
+font-family = "JetBrains Mono"
+font-size = 14
 window-padding-x = 4
 
 theme = noctalia
