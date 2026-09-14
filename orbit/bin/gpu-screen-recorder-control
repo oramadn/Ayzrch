@@ -45,7 +45,7 @@ choose_monitor() {
         printf 'zenity is required to choose a recording monitor.\n' >&2
         return 1
     }
-    hyprctl -j monitors | jq -r '.[].name' | zenity \
+    orbit-compositor monitors | jq -r '.[].name' | zenity \
         --list \
         --title='Select recording monitor' \
         --text='Choose the monitor to record:' \

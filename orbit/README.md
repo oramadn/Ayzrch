@@ -1,14 +1,19 @@
 # Orbit
 
 Orbit is an early-release (`v0.1`) Fedora + Hyprland desktop configuration.
-It provides authored Hyprland policy, session services, application routing,
+It provides authored compositor policy, session services, application routing,
 workspace behavior, a QuickShell global menu, and integration with Noctalia and
 the independent Orbit Wallpaper Engine.
 
-Orbit does not replace Hyprland or Noctalia. Hyprland remains the compositor;
-Noctalia remains the shell and color-palette authority. Orbit owns the glue
-between them and its own user services. External plugin source and compiled
-plugins are installed outside this repository.
+Orbit does not replace the compositor or Noctalia. Noctalia remains the shell
+and color-palette authority. Orbit owns the glue between them and its own user
+services. External plugin source and compiled plugins are installed outside this
+repository.
+
+Orbit runs on two compositors, chosen at the login screen. Hyprland is the
+reference session. The niri session is the same desktop — the same shell,
+palette, adapters, global menu and cheatsheet — with niri's scrollable tiling
+doing the window management; see [`docs/niri-session.md`](docs/niri-session.md).
 
 ## Validated Platform
 
@@ -25,9 +30,11 @@ dependency updates.
 ## Features
 
 - Noctalia-driven colors with Orbit adapters for GTK, Qt/KDE, Kitty, WezTerm,
-  Hyprland, and Hyprlock;
+  herdr, Hyprland, niri, and Hyprlock;
 - Hyprland workspace policy, application placement, Alt+Tab, transitions, and
   lock/session services;
+- a niri session that reuses all of the above and delegates navigation to the
+  compositor, addressed through the single `orbit-compositor` shim;
 - QuickShell global menu and Orbit-routed Wallpaper Engine settings;
 - Hyprglass, ScrollOverview, HyprWindowShade, and Dynamic Cursors integration;
 - optional Sunshine, game-session, Nautilus, LocalSend, recorder, browser,
@@ -53,9 +60,15 @@ Hyprland -> Noctalia + QuickShell global menu
          -> hyprland-session.target
               -> Wallpaper Engine, workspace, shader, idle, and policy services
 
+niri     -> Noctalia + QuickShell global menu
+         -> niri-session.target
+              -> Wallpaper Engine, idle, and policy services
+
+Either compositor -> orbit-compositor -> one JSON shape for every Orbit caller
+
 Noctalia palette/templates -> Orbit semantic and presentation adapters
-Orbit configuration       -> Hyprland policy, routing, and machine-independent services
-Machine-local setup       -> nwg-displays monitor layout and optional Sunshine profile
+Orbit configuration       -> compositor policy, routing, and machine-independent services
+Machine-local setup       -> nwg-displays (Hyprland) or local.kdl (niri), optional Sunshine profile
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) and

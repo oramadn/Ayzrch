@@ -28,6 +28,29 @@ ShellRoot {
     property string pendingApplicationOutput: ""
     property var monitorGeometry: ({})
     property var panelGeometry: ({})
+    property bool cheatsheetOpen: false
+    property string cheatsheetOutput: ""
+    property var cheatsheetGroups: []
+
+    // Modifier bits reported by `orbit-compositor binds`, in the order a chord
+    // reads. They are Hyprland's numbering under either compositor.
+    readonly property var cheatsheetModifiers: [
+        { mask: 64, name: "Super" },
+        { mask: 4, name: "Ctrl" },
+        { mask: 8, name: "Alt" },
+        { mask: 1, name: "Shift" }
+    ]
+    // Keysyms whose printed form differs from the reported name. Both scroll
+    // directions collapse to one label so they merge into a single row.
+    readonly property var cheatsheetKeyNames: ({
+        "left": "←", "right": "→", "up": "↑", "down": "↓",
+        "Return": "Enter", "Escape": "Esc", "TAB": "Tab", "space": "Space",
+        "grave": "`", "slash": "/", "comma": ",", "period": ".",
+        "minus": "-", "equal": "=", "bracketleft": "[", "bracketright": "]",
+        "semicolon": ";", "apostrophe": "'", "backslash": "\\",
+        "mouse:272": "Left click", "mouse:273": "Right click",
+        "mouse:274": "Middle click", "mouse_up": "Scroll", "mouse_down": "Scroll"
+    })
 
     ThemeAdapter { id: theme }
 
@@ -44,7 +67,7 @@ ShellRoot {
 
     Process {
         id: cursorProcess
-        command: ["hyprctl", "cursorpos", "-j"]
+        command: ["orbit-compositor", "cursorpos"]
         stdout: StdioCollector {
             onStreamFinished: root.finishCursorOpen(text)
         }
@@ -52,7 +75,7 @@ ShellRoot {
 
     Process {
         id: monitorProcess
-        command: ["hyprctl", "monitors", "-j"]
+        command: ["orbit-compositor", "monitors"]
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
@@ -69,7 +92,7 @@ ShellRoot {
 
     Process {
         id: focusProcess
-        command: ["hyprctl", "activewindow", "-j"]
+        command: ["orbit-compositor", "activewindow"]
         stdout: StdioCollector {
             onStreamFinished: root.checkFocusedApplication(text)
         }
@@ -77,7 +100,7 @@ ShellRoot {
 
     Process {
         id: panelProcess
-        command: ["hyprctl", "layers", "-j"]
+        command: ["orbit-compositor", "layers"]
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
@@ -125,6 +148,35 @@ ShellRoot {
         id: pointerExitTimer
         interval: 120
         onTriggered: root.pointerInsideAnyMenuSurface = false
+    }
+
+    // The cheatsheet resolves its own monitor and bind list on every open rather
+    // than reusing the polled copies, so the overlay can never land on the
+    // monitor that was focused a second ago or show a stale bind.
+    Process {
+        id: cheatsheetMonitorProcess
+        command: ["orbit-compositor", "monitors"]
+        stdout: StdioCollector {
+            onStreamFinished: root.finishCheatsheetOutput(text)
+        }
+    }
+
+    Process {
+        id: cheatsheetBindsProcess
+        command: ["orbit-compositor", "binds"]
+        stdout: StdioCollector {
+            onStreamFinished: root.finishCheatsheetOpen(text)
+        }
+    }
+
+    IpcHandler {
+        target: "cheatsheet"
+
+        function toggle() { root.toggleCheatsheet() }
+
+        function open() { root.openCheatsheet() }
+
+        function close() { root.closeCheatsheet() }
     }
 
     IpcHandler {
@@ -216,6 +268,7 @@ ShellRoot {
     }
 
     function requestOpen(output, index, x, y, generation) {
+        closeCheatsheet()
         var value = outputState(output)
         if (!value || !value.available || !value.menus || !value.menus[index]) {
             closeMenu()
@@ -295,6 +348,7 @@ ShellRoot {
     }
 
     function requestApplicationOpen(output, generation) {
+        closeCheatsheet()
         var value = outputState(output)
         var candidate = value && value.candidate ? value.candidate : null
         var address = candidate ? String(candidate.address || "") : ""
@@ -353,9 +407,151 @@ ShellRoot {
         return Number((monitorGeometry[String(output)] || ({})).height || 0)
     }
 
+    function toggleCheatsheet() {
+        if (cheatsheetOpen)
+            closeCheatsheet()
+        else
+            openCheatsheet()
+    }
+
+    function openCheatsheet() {
+        // The menu and the cheatsheet both take the overlay layer, so only one
+        // of them is ever up.
+        closeMenu()
+        if (!cheatsheetMonitorProcess.running)
+            cheatsheetMonitorProcess.running = true
+    }
+
+    function closeCheatsheet() {
+        cheatsheetOpen = false
+        cheatsheetOutput = ""
+    }
+
+    function finishCheatsheetOutput(raw) {
+        var output = ""
+        try {
+            JSON.parse(raw || "[]").forEach(function(monitor) {
+                if (monitor.focused === true)
+                    output = String(monitor.name)
+            })
+        } catch (error) {
+            output = ""
+        }
+        cheatsheetOutput = output
+        if (output === "")
+            return
+        if (!cheatsheetBindsProcess.running)
+            cheatsheetBindsProcess.running = true
+    }
+
+    function finishCheatsheetOpen(raw) {
+        loadCheatsheet(raw)
+        cheatsheetOpen = cheatsheetOutput !== "" && cheatsheetGroups.length > 0
+    }
+
+    function cheatsheetModifierText(mask) {
+        var parts = []
+        cheatsheetModifiers.forEach(function(modifier) {
+            if ((mask & modifier.mask) !== 0)
+                parts.push(modifier.name)
+        })
+        return parts.join(" + ")
+    }
+
+    function cheatsheetKeyText(key) {
+        if (cheatsheetKeyNames[key] !== undefined)
+            return cheatsheetKeyNames[key]
+        return key.length === 1 ? key.toUpperCase() : key
+    }
+
+    function cheatsheetChord(modifiers, keys) {
+        // A run of digits is a range in every case Orbit binds one, so the ten
+        // workspace keys read as 1–0 instead of a slash-separated wall.
+        var everyDigit = keys.every(function(key) { return /^[0-9]$/.test(key) })
+        var text = keys.length > 3 && everyDigit
+            ? keys[0] + "–" + keys[keys.length - 1]
+            : keys.join("/")
+        return modifiers ? modifiers + " + " + text : text
+    }
+
+    // Binds are grouped and merged by the "Group | Label" description they carry.
+    // Binds sharing a group, a label and a modifier set become one row whose keys
+    // are joined, which is what collapses the directional and workspace loops.
+    function loadCheatsheet(raw) {
+        var entries = []
+        try { entries = JSON.parse(raw || "[]") || [] }
+        catch (error) { entries = [] }
+        var groups = []
+        var groupByName = ({})
+        var rowByIdentity = ({})
+        entries.forEach(function(entry) {
+            var description = String(entry.description || "")
+            var separator = description.indexOf(" | ")
+            if (separator < 0)
+                return
+            var groupName = description.substring(0, separator).trim()
+            var label = description.substring(separator + 3).trim()
+            var key = cheatsheetKeyText(String(entry.key || ""))
+            if (groupName === "" || label === "" || key === "")
+                return
+            var modifiers = cheatsheetModifierText(Number(entry.modmask || 0))
+            var group = groupByName[groupName]
+            if (!group) {
+                group = { name: groupName, rows: [] }
+                groupByName[groupName] = group
+                groups.push(group)
+            }
+            var identity = [groupName, label, modifiers].join(" ")
+            var row = rowByIdentity[identity]
+            if (!row) {
+                row = { label: label, modifiers: modifiers, keys: [] }
+                rowByIdentity[identity] = row
+                group.rows.push(row)
+            }
+            if (row.keys.indexOf(key) < 0)
+                row.keys.push(key)
+        })
+        groups.forEach(function(group) {
+            group.rows.forEach(function(row) {
+                row.chord = root.cheatsheetChord(row.modifiers, row.keys)
+            })
+        })
+        cheatsheetGroups = groups
+    }
+
+    // Greedy balance: each group lands in the shortest column so far, counting
+    // its heading as two rows. Groups keep their configuration order otherwise.
+    function cheatsheetColumns(count) {
+        var columns = []
+        var weights = []
+        for (var index = 0; index < count; index++) {
+            columns.push([])
+            weights.push(0)
+        }
+        cheatsheetGroups.forEach(function(group) {
+            var lightest = 0
+            for (var index = 1; index < count; index++) {
+                if (weights[index] < weights[lightest])
+                    lightest = index
+            }
+            columns[lightest].push(group)
+            weights[lightest] += group.rows.length + 2
+        })
+        return columns
+    }
+
     Variants {
         model: Quickshell.screens
         AnchorSurface {
+            modelData: modelData
+            frontend: root
+            themeData: theme
+        }
+    }
+
+    Variants {
+        model: Quickshell.screens
+        CheatsheetSurface {
             modelData: modelData
             frontend: root
             themeData: theme

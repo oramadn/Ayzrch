@@ -26,6 +26,10 @@ including `systemctl`, `hyprctl`, `flock`, `sg`, `ps`, `wl-copy`, and
 ## Required External Projects
 
 - Hyprland and Noctalia, which remain the compositor and shell/palette owners;
+- for the niri session: `niri`, `xwayland-satellite` (niri has no built-in
+  Xwayland, and Orbit carries rules for X11 clients), and
+  `xdg-desktop-portal-gnome`, the only backend implementing ScreenCast for
+  niri. None of the four Hyprland plugins apply there;
 - QuickShell, which hosts Orbit's global-menu configuration;
 - the four Hyprland plugins listed in [`external-components.md`](external-components.md);
 - the independent Orbit Wallpaper Engine project. v0.1 includes an x86-64
@@ -50,6 +54,10 @@ Hyprland commit differs from the validated reference.
 - Steam and GameMode for game sessions;
 - Obsidian, Zen Browser, Zed, WezTerm, Kitty, and Nautilus presentation or
   application integrations;
+- herdr, which no script installs -- it ships its own updater. Orbit only
+  adapts it if it is already there, so install it first, then run
+  `orbit-update-all-colors noctalia` once to write its palette; after that the
+  wallpaper drives it like every other adapter;
 - Nautilus Actions dependencies and its pinned upstream extension;
 - LocalSend;
 - Plymouth script-theme packages and privileged initramfs installation.

@@ -73,6 +73,28 @@ for relative in "$repo_dir"/config/hypr/scripts/* "$repo_dir"/config/hypr/shader
     [[ -f "$relative" ]] || continue
     link_config "${relative#"$repo_dir"/config/}"
 done
+# The niri session. orbit.kdl and orbit-overrides.kdl are Orbit's, so they are
+# linked; config.kdl and local.kdl are seeded because Noctalia's niri template
+# appends its own include to the first and the second is this machine's.
+# noctalia.kdl is seeded empty for the same reason orbit-niri-session re-seeds
+# it at start: niri treats a missing include as a fatal parse error, and the
+# palette output does not exist until Noctalia has rendered its templates once.
+for relative in niri/orbit.kdl niri/orbit-overrides.kdl; do
+    link_config "$relative"
+done
+seed_file "$repo_dir/config/niri/config.kdl" "$home_dir/.config/niri/config.kdl"
+seed_file "$repo_dir/config/niri/local.kdl" "$home_dir/.config/niri/local.kdl"
+mkdir -p "$home_dir/.config/niri"
+[[ -e "$home_dir/.config/niri/noctalia.kdl" ]] ||
+    printf '// Replaced by Noctalia the first time it renders its templates.\n' \
+        >"$home_dir/.config/niri/noctalia.kdl"
+# monitor.kdl is nwg-displays' default output path for niri and the counterpart
+# of monitors.lua on the Hyprland side. It is created rather than linked:
+# nwg-displays replaces a read-only symlink it finds there with a regular file.
+[[ -e "$home_dir/.config/niri/monitor.kdl" ]] ||
+    printf '// Written by nwg-displays. Run it to arrange this machine'"'"'s monitors.\n' \
+        >"$home_dir/.config/niri/monitor.kdl"
+
 for relative in noctalia/90-orbit-glass.toml noctalia/hooks.toml \
     noctalia/templates/wallpaper-palette.lua; do
     link_config "$relative"
@@ -83,11 +105,26 @@ for relative in "$repo_dir"/config/quickshell/global-menu/*; do
 done
 for relative in gtk-3.0/gtk.css \
     gtk-3.0/gtk3-presentation.css gtk-3.0/shadow-overrides.css \
-    gtk-4.0/gtk.css gtk-4.0/gtk-dark.css \
+    gtk-4.0/gtk.css \
+    gtk-4.0/gtk4-presentation.css \
     gtk-4.0/shadow-overrides.css kitty/kitty.conf \
     wezterm/orbit-about.lua zed/settings.json zed/themes/noctalia.json \
     zen/orbit-userChrome.css; do
     link_config "$relative"
+done
+
+# orbit.css and orbit-shape.css are orbit-theme's generated GTK outputs, and
+# gtk.css imports both. They do not exist until orbit-theme has run, and a
+# missing @import is a parser error on every GTK application start, so an empty
+# placeholder is created for each when absent. orbit-theme overwrites them.
+for gtk_version in 3.0 4.0; do
+    for generated in orbit.css orbit-shape.css; do
+        target="$home_dir/.config/gtk-$gtk_version/$generated"
+        mkdir -p "$(dirname "$target")"
+        [[ -e "$target" ]] ||
+            printf '/* Replaced by orbit-theme when it next generates GTK output. */\n' \
+                >"$target"
+    done
 done
 
 seed_file "$repo_dir/config/wezterm/wezterm.lua" "$home_dir/.config/wezterm/wezterm.lua"
@@ -108,7 +145,8 @@ for source in "$repo_dir/systemd/user"/*.service "$repo_dir/systemd/user"/*.time
     [[ -f "$source" ]] || continue
     link_owned "$source" "$home_dir/.config/systemd/user/$(basename "$source")"
 done
-for directory in hypridle.service.d; do
+for directory in hypridle.service.d hyprpolkitagent.service.d \
+    localsend.service.d awww-daemon.service.d; do
     for source in "$repo_dir/systemd/user/$directory"/*; do
         [[ -f "$source" ]] || continue
         link_owned "$source" "$home_dir/.config/systemd/user/$directory/$(basename "$source")"
@@ -119,9 +157,23 @@ if [[ "$optional" == true ]]; then
     systemctl --user enable localsend.service
 fi
 systemctl --user daemon-reload
-systemctl --user enable orbit-wallpaper-engine.service workspace-alt-tab-input.service \
+# The Alt+Tab, workspace-allocation and shader units are wanted by
+# hyprland-session.target alone; niri-session.target does not pull them, so
+# enabling them here is harmless under either session.
+systemctl --user enable workspace-alt-tab-input.service \
     workspace-alt-tab-release.service new-workspace-apps.service \
     window-shader-events.service hypridle.service hyprpolkitagent.service
+# The Wallpaper Engine is an independent project and is not always installed —
+# this tree ships the service, not the renderer. Enabling the unit without its
+# binary gives a crash loop under Restart=on-failure at every login, and every
+# helper that waits on the engine then pays a timeout for a renderer that will
+# never arrive.
+if [[ -x "$home_dir/.local/bin/orbit-wallpaper-engine" ]]; then
+    systemctl --user enable orbit-wallpaper-engine.service
+else
+    systemctl --user disable orbit-wallpaper-engine.service >/dev/null 2>&1 || true
+    printf 'Wallpaper Engine binary is absent; its service is left disabled.\n'
+fi
 
 command -v noctalia >/dev/null 2>&1 || {
     printf 'Noctalia is required before generated appearance outputs can be refreshed.\n' >&2

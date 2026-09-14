@@ -65,14 +65,14 @@ fi
 
 # Capture the launch context for launch correlation only. Final placement is
 # Workspace placement is handled only for the explicit allowlist.
-before=$(hyprctl clients -j 2>/dev/null || printf '[]')
+before=$(orbit-compositor clients 2>/dev/null || printf '[]')
 systemd-run --user --scope --collect --quiet "$HOME/.local/bin/orbit-launch" --shell-command "$command" &
 launcher_pid=$!
 
 if [ -n "$expected_class" ]; then
     i=0
     while [ "$i" -lt 40 ]; do
-        clients=$(hyprctl clients -j 2>/dev/null || printf '[]')
+        clients=$(orbit-compositor clients 2>/dev/null || printf '[]')
         address=
         while IFS='\t' read -r candidate_address candidate_pid; do
             [ -n "$candidate_address" ] || continue

@@ -1,0 +1,489 @@
+// Orbit's niri session.
+//
+// This is the niri counterpart to config/hypr/hyprland.lua. It is deliberately
+// not a translation of it: Orbit's Hyprland policy emulates, with scripts, the
+// directional focus, vertical workspace hierarchy and workspace overview that
+// niri provides natively, so under niri the compositor does that work and the
+// scripts are absent. What is reproduced exactly is the part the user sees and
+// touches — the keymap, the shape and colour of windows, and every Noctalia and
+// Orbit surface layered on top.
+//
+// Colours come from Noctalia, through noctalia.kdl, which config.kdl includes
+// after this file so the palette wins over the defaults set here.
+//
+// Cheatsheet metadata: hotkey-overlay-title carries the same "Group | Label"
+// description Orbit's Hyprland binds carry, so the QuickShell cheatsheet and
+// niri's own hotkey overlay are both fed from this one line per bind, and a
+// bind without a title is deliberately absent from both.
+
+// ============================================================
+// ENVIRONMENT
+// ============================================================
+// PATH and the NVIDIA variables are set by orbit-niri-session before niri
+// starts, because niri's KDL cannot read $HOME or branch on the host's GPU.
+environment {
+    // Orbit's Qt adapters target hyprqt6engine, which is compositor-independent
+    // and remains the platform theme under niri.
+    QT_QPA_PLATFORMTHEME "hyprqt6engine"
+    HYPRCURSOR_THEME "oblique-cursor"
+    HYPRCURSOR_SIZE "24"
+    XCURSOR_THEME "Adwaita"
+    XCURSOR_SIZE "24"
+    DISPLAY ":0"
+}
+
+// ============================================================
+// SESSION STARTUP
+// ============================================================
+// The same three processes Hyprland's start hook launches, in the same order
+// and for the same reasons: Noctalia from the graphical session so the
+// applications it launches inherit the logind session, the global-menu
+// QuickShell instance once the compositor is up, and the Orbit bootstrap, which
+// imports the environment, starts the session target and runs the transition.
+// Xwayland is a separate process under niri. Affinity, Steam and the other
+// X11 clients Orbit rules for need it, and it must own DISPLAY=:0 before any
+// of them start.
+spawn-at-startup "xwayland-satellite"
+
+spawn-at-startup "/usr/bin/noctalia"
+spawn-sh-at-startup "${ORBIT_QUICKSHELL:-quickshell} --config global-menu --no-duplicate"
+spawn-sh-at-startup "$HOME/.local/bin/orbit-session-bootstrap"
+
+// ============================================================
+// INPUT
+// ============================================================
+input {
+    keyboard {
+        xkb {
+            layout "us,ara"
+            options "grp:alt_shift_toggle"
+        }
+    }
+
+    mouse {
+        accel-profile "flat"
+        accel-speed 0.0
+    }
+
+    touchpad {
+        tap
+        accel-speed 0.0
+        // Orbit sets natural_scroll = false on Hyprland; niri's default is off.
+    }
+
+    // Hyprland's follow_mouse = 2 focuses on motion without warping the pointer.
+    // niri's equivalent pair is focus-follows-mouse with no cursor warping.
+    focus-follows-mouse max-scroll-amount="0%"
+
+    // Orbit's Hyprland cursor policy is no_warps: the pointer stays where it is
+    // when focus changes. niri only warps when warp-mouse-to-focus is present,
+    // so that node is deliberately absent rather than disabled.
+}
+
+cursor {
+    xcursor-theme "Adwaita"
+    xcursor-size 24
+}
+
+clipboard {
+    disable-primary
+}
+
+prefer-no-csd
+
+screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
+
+hotkey-overlay {
+    // Orbit's cheatsheet on Super+/ is the documented overlay; niri's built-in
+    // one stays available but must not appear unprompted on first start.
+    skip-at-startup
+}
+
+// ============================================================
+// LAYOUT
+// ============================================================
+layout {
+    // Hyprland gaps_in = 5 (so 10px between windows) and gaps_out = 20. niri's
+    // single gap covers both, so the difference is made up with struts.
+    gaps 10
+
+    struts {
+        left 10
+        right 10
+        top 10
+        bottom 10
+    }
+
+    border {
+        on
+        width 2
+        // Overridden by Noctalia's palette; these are only the pre-theme values.
+        active-color "#adc6ff"
+        inactive-color "#112f60"
+    }
+
+    // Orbit draws window state with the border alone, as it does on Hyprland.
+    focus-ring {
+        off
+    }
+
+    // Half the screen. Hyprland's master layout gives its main window 70%
+    // (mfact 0.7), but that reads as "too wide" under a scrollable compositor,
+    // where a new window extends the strip rather than competing for one
+    // screenful — and it stops Maximize from being a clean half/full toggle.
+    default-column-width {
+        proportion 0.5
+    }
+
+    preset-column-widths {
+        proportion 0.33333
+        proportion 0.5
+        proportion 0.7
+        proportion 1.0
+    }
+
+    center-focused-column "on-overflow"
+
+    shadow {
+        on
+        softness 30
+        spread 2
+        offset x=0 y=4
+        color "#1a1a1aee"
+    }
+
+    tab-indicator {
+        hide-when-single-tab
+        place-within-column
+        gap 4
+        width 4
+        length total-proportion=0.2
+        position "left"
+    }
+}
+
+// ============================================================
+// ANIMATIONS
+// ============================================================
+// Orbit's Hyprland motion is a tuned spring that leaves decisively and settles
+// without overshoot. Critically damped springs are the niri expression of that.
+animations {
+    workspace-switch {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
+    horizontal-view-movement {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
+    window-movement {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
+    window-resize {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
+    window-open {
+        duration-ms 300
+        curve "ease-out-expo"
+    }
+
+    window-close {
+        duration-ms 200
+        curve "ease-out-quad"
+    }
+
+    overview-open-close {
+        spring damping-ratio=1.0 stiffness=800 epsilon=0.0001
+    }
+
+    screenshot-ui-open {
+        duration-ms 200
+        curve "ease-out-quad"
+    }
+}
+
+overview {
+    zoom 0.5
+    backdrop-color "#050508"
+}
+
+// ============================================================
+// WINDOW RULES
+// ============================================================
+// Shape and glass for every window, matching Orbit's Hyprland decoration block:
+// an 11px radius clipped to geometry, and the blur that Hyprglass provides
+// there. niri's background-effect is the native equivalent; the refraction and
+// chromatic aberration of the Hyprglass "glass" preset have no counterpart.
+window-rule {
+    geometry-corner-radius 11
+    clip-to-geometry true
+
+    background-effect {
+        blur true
+        xray true
+        noise 0.03
+        saturation 1.3
+    }
+}
+
+// Hyprland inactive_opacity = 0.95.
+window-rule {
+    match is-active=false
+    opacity 0.95
+}
+
+// Steam games: no effects, no rounding, no blur, exactly as the Hyprland rule
+// strips them, so nothing sits between the game and the screen.
+window-rule {
+    match app-id=r#"^steam_app_"#
+    geometry-corner-radius 0
+    clip-to-geometry false
+    opacity 1.0
+    background-effect {
+        blur false
+    }
+    shadow {
+        off
+    }
+    variable-refresh-rate true
+}
+
+// Zed and Obsidian supply their own chrome and shadow through the tracked
+// theme; the client surface only needs the radius and no Orbit shadow.
+window-rule {
+    match app-id=r#"^dev\.zed\.Zed$"#
+    match app-id=r#"^md\.obsidian\.Obsidian$"#
+    geometry-corner-radius 11
+    clip-to-geometry true
+    shadow {
+        off
+    }
+}
+
+// Steam opens many transient windows; only the main one belongs in the strip.
+window-rule {
+    match app-id=r#"^steam$"#
+    open-floating true
+}
+
+window-rule {
+    match app-id=r#"^steam$"# title=r#"^Steam$"#
+    open-floating false
+}
+
+// The About This Computer fastfetch terminal is launched with its own app-id so
+// ordinary terminals are unaffected.
+window-rule {
+    match app-id=r#"^orbit-about$"#
+    open-floating true
+    default-floating-position x=0 y=0 relative-to="top-right"
+    default-window-height { fixed 262; }
+    default-column-width { fixed 534; }
+}
+
+window-rule {
+    match app-id=r#"^dev\.noctalia\.Noctalia$"#
+    open-floating true
+    default-window-height { fixed 920; }
+    default-column-width { fixed 1080; }
+}
+
+// The Orbit Wallpaper Engine settings window is routed to a fixed corner panel
+// on Hyprland; niri's floating placement is the equivalent.
+window-rule {
+    match title=r#"^Orbit Wallpaper Engine"#
+    open-floating true
+    default-floating-position x=20 y=45 relative-to="top-right"
+    default-column-width { fixed 560; }
+    default-window-height { fixed 760; }
+}
+
+// Picture-in-picture and dialogs float, which Hyprland's floating default
+// covered incidentally and niri has to be told.
+window-rule {
+    match is-floating=true
+    geometry-corner-radius 11
+    clip-to-geometry true
+}
+
+// ============================================================
+// LAYER RULES
+// ============================================================
+// Orbit's own layer-shell surfaces take native blur, exactly as the Hyprland
+// layer rules give them native Hyprland blur rather than Hyprglass.
+layer-rule {
+    match namespace=r#"^orbit-menu-glass$"#
+    match namespace=r#"^orbit-workspace-indicators$"#
+    match namespace=r#"^orbit-session-loading$"#
+    match namespace=r#"^orbit-overview$"#
+    match namespace=r#"^orbit-cheatsheet$"#
+
+    background-effect {
+        blur true
+        xray false
+        noise 0.03
+        saturation 1.3
+    }
+}
+
+// Noctalia's translucent surfaces. 90-orbit-glass.toml puts the dock,
+// notifications and the OSD at 0.7 opacity and the panel in "glass" mode, so
+// each of them is counting on something blurred behind it to stay legible —
+// which is what the launcher gets from Hyprland's global blur.
+//
+// Every namespace is anchored. `^noctalia-panel` unanchored would also match
+// noctalia-panel-click-shield, the full-screen transparent surface the panel
+// puts down to catch outside clicks, and blurring that blurs the whole screen.
+layer-rule {
+    match namespace=r#"^noctalia-panel$"#
+    match namespace=r#"^noctalia-attached-panel$"#
+    match namespace=r#"^noctalia-dock$"#
+    match namespace=r#"^noctalia-notification$"#
+    match namespace=r#"^noctalia-osd$"#
+    match namespace=r#"^noctalia-window-switcher$"#
+
+    background-effect {
+        blur true
+        xray false
+        noise 0.03
+        saturation 1.3
+    }
+}
+
+// The bar paints an opaque background of its own, so blurring behind it only
+// costs a pass. The click shield must never be blurred, per above.
+layer-rule {
+    match namespace=r#"^noctalia-bar"#
+    match namespace=r#"^noctalia-panel-click-shield$"#
+    match namespace=r#"^orbit-top-panel$"#
+
+    background-effect {
+        blur false
+    }
+}
+
+// The wallpaper. place-within-backdrop is deliberately NOT set: it moves a
+// background-layer surface into the overview backdrop instead of drawing it at
+// its normal position, which leaves the workspace showing niri's grey.
+layer-rule {
+    match namespace=r#"^awww"#
+    opacity 1.0
+}
+
+// ============================================================
+// KEY BINDINGS
+// ============================================================
+// Orbit's keymap, key for key, with niri's native action behind each one.
+binds {
+    // ---- Applications ----
+    Mod+Return hotkey-overlay-title="Applications | Terminal" { spawn "ghostty"; }
+    Mod+E      hotkey-overlay-title="Applications | File manager" { spawn "dolphin"; }
+    Mod+A      hotkey-overlay-title="Applications | ChatGPT" { spawn "chatgpt"; }
+    Mod+Space  hotkey-overlay-title="Applications | Launcher" { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
+    Mod+B      hotkey-overlay-title="Applications | Browser (Personal)" { spawn "zen-browser" "-P" "Personal"; }
+    Mod+Shift+B hotkey-overlay-title="Applications | Browser (Work)" { spawn "zen-browser" "-P" "Work"; }
+    Mod+Shift+E hotkey-overlay-title="Applications | Emoji picker" { spawn "noctalia" "msg" "panel-toggle" "launcher" "/emo"; }
+
+    // ---- Workspaces ----
+    // niri's overview is what Orbit's Alt+Tab ScrollOverview switcher stands in
+    // for on Hyprland, so the same key opens the real thing here.
+    Alt+Tab    hotkey-overlay-title="Workspaces | Overview" { toggle-overview; }
+    Mod+Escape hotkey-overlay-title="Workspaces | Close overview" { close-overview; }
+
+    Mod+1 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 1; }
+    Mod+2 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 2; }
+    Mod+3 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 3; }
+    Mod+4 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 4; }
+    Mod+5 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 5; }
+    Mod+6 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 6; }
+    Mod+7 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 7; }
+    Mod+8 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 8; }
+    Mod+9 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 9; }
+    Mod+0 hotkey-overlay-title="Workspaces | Switch to workspace" { focus-workspace 10; }
+
+    Mod+Shift+1 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 1; }
+    Mod+Shift+2 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 2; }
+    Mod+Shift+3 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 3; }
+    Mod+Shift+4 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 4; }
+    Mod+Shift+5 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 5; }
+    Mod+Shift+6 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 6; }
+    Mod+Shift+7 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 7; }
+    Mod+Shift+8 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 8; }
+    Mod+Shift+9 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 9; }
+    Mod+Shift+0 hotkey-overlay-title="Workspaces | Send to workspace" { move-column-to-workspace 10; }
+
+    // The named "scratch" workspace stands in for Hyprland's special workspace.
+    Mod+Grave       hotkey-overlay-title="Workspaces | Toggle scratchpad" { focus-workspace "scratch"; }
+    Mod+Shift+Grave hotkey-overlay-title="Workspaces | Send to scratchpad" { move-column-to-workspace "scratch"; }
+
+    // ---- Windows ----
+    Mod+C hotkey-overlay-title="Windows | Close window" { close-window; }
+    Mod+Q hotkey-overlay-title="Windows | Close window" { close-window; }
+    Mod+V hotkey-overlay-title="Windows | Toggle floating" { toggle-window-floating; }
+    Alt+Return hotkey-overlay-title="Windows | Fullscreen" { fullscreen-window; }
+    Mod+F hotkey-overlay-title="Windows | Maximize" { maximize-column; }
+    Mod+P hotkey-overlay-title="Windows | Maximize" { maximize-column; }
+
+    // Directional focus. On Hyprland a script walks windows, then the monitor
+    // edge, then the workspace hierarchy; niri's or-monitor and or-workspace
+    // actions are that same escalation, built in.
+    Mod+Left  hotkey-overlay-title="Windows | Move focus" { focus-column-or-monitor-left; }
+    Mod+Down  hotkey-overlay-title="Windows | Move focus" { focus-window-or-workspace-down; }
+    Mod+Up    hotkey-overlay-title="Windows | Move focus" { focus-window-or-workspace-up; }
+    Mod+Right hotkey-overlay-title="Windows | Move focus" { focus-column-or-monitor-right; }
+
+    Mod+Shift+Left  repeat=false hotkey-overlay-title="Windows | Move window" { move-column-left-or-to-monitor-left; }
+    Mod+Shift+Down  repeat=false hotkey-overlay-title="Windows | Move window" { move-window-down-or-to-workspace-down; }
+    Mod+Shift+Up    repeat=false hotkey-overlay-title="Windows | Move window" { move-window-up-or-to-workspace-up; }
+    Mod+Shift+Right repeat=false hotkey-overlay-title="Windows | Move window" { move-column-right-or-to-monitor-right; }
+
+    // Hyprland resizes by ±40 pixels per press; niri takes the same fixed step.
+    Mod+Ctrl+Left  hotkey-overlay-title="Windows | Resize window" { set-column-width "-40"; }
+    Mod+Ctrl+Down  hotkey-overlay-title="Windows | Resize window" { set-window-height "+40"; }
+    Mod+Ctrl+Up    hotkey-overlay-title="Windows | Resize window" { set-window-height "-40"; }
+    Mod+Ctrl+Right hotkey-overlay-title="Windows | Resize window" { set-column-width "+40"; }
+
+    // ---- Columns ----
+    // Orbit has no counterpart for these: a scrollable compositor needs a way to
+    // put two windows in one column, and Hyprland's master layout does not. They
+    // are niri's own defaults, kept where they do not collide with Orbit's keys.
+    Mod+Comma  hotkey-overlay-title="Columns | Add window to column" { consume-window-into-column; }
+    Mod+Period hotkey-overlay-title="Columns | Take window out of column" { expel-window-from-column; }
+    Mod+R      hotkey-overlay-title="Columns | Cycle column width" { switch-preset-column-width; }
+    Mod+Shift+Backslash hotkey-overlay-title="Columns | Centre column" { center-column; }
+
+    // ---- Session ----
+    Mod+L hotkey-overlay-title="Session | Lock screen" { spawn-sh "$HOME/.local/bin/orbit-lock"; }
+    Mod+M hotkey-overlay-title="Session | Power off" { spawn-sh "$HOME/.local/bin/orbit-power shutdown"; }
+    Ctrl+Shift+Escape hotkey-overlay-title="Session | System monitor" { spawn "flatpak" "run" "io.missioncenter.MissionCenter"; }
+    Mod+Slash hotkey-overlay-title="Session | Keyboard shortcuts" { spawn "quickshell" "-c" "global-menu" "ipc" "call" "cheatsheet" "toggle"; }
+
+    // ---- Capture ----
+    Mod+Shift+S hotkey-overlay-title="Capture | Screenshot region" { spawn-sh "grim -g \"$(slurp)\" - | satty --filename -"; }
+    Mod+Shift+R hotkey-overlay-title="Capture | Record screen" { spawn-sh "$HOME/.local/bin/gpu-screen-recorder-control record"; }
+    Mod+Shift+Z hotkey-overlay-title="Capture | Save instant replay" { spawn-sh "$HOME/.local/bin/gpu-screen-recorder-control replay"; }
+    Mod+Shift+C hotkey-overlay-title="Capture | Colour picker" { spawn "hyprpicker" "-a"; }
+    Print { screenshot; }
+
+    // ---- Mouse ----
+    // Super + left-drag moves a window and Super + right-drag resizes it, as
+    // they do under Hyprland. niri implements both natively rather than as
+    // binds, so they carry no overlay title and the cheatsheet cannot show
+    // them; see docs/niri-session.md.
+    Mod+WheelScrollUp   cooldown-ms=150 hotkey-overlay-title="Mouse | Change workspace" { focus-workspace-up; }
+    Mod+WheelScrollDown cooldown-ms=150 hotkey-overlay-title="Mouse | Change workspace" { focus-workspace-down; }
+
+    // ---- Audio, media and brightness ----
+    XF86AudioRaiseVolume allow-when-locked=true { spawn "wpctl" "set-volume" "-l" "1" "@DEFAULT_AUDIO_SINK@" "5%+"; }
+    XF86AudioLowerVolume allow-when-locked=true { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "5%-"; }
+    XF86AudioMute        allow-when-locked=true { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SINK@" "toggle"; }
+    XF86AudioMicMute     allow-when-locked=true { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SOURCE@" "toggle"; }
+    XF86MonBrightnessUp   { spawn "brightnessctl" "-e4" "-n2" "set" "5%+"; }
+    XF86MonBrightnessDown { spawn "brightnessctl" "-e4" "-n2" "set" "5%-"; }
+    XF86AudioNext  allow-when-locked=true { spawn "playerctl" "next"; }
+    XF86AudioPlay  allow-when-locked=true { spawn "playerctl" "play-pause"; }
+    XF86AudioPause allow-when-locked=true { spawn "playerctl" "play-pause"; }
+    XF86AudioPrev  allow-when-locked=true { spawn "playerctl" "previous"; }
+}

@@ -1,0 +1,25 @@
+// Orbit's niri entry point.
+//
+// Seeded, not linked: Noctalia's niri template appends its own include to this
+// file, and orbit-niri-session re-seeds any include whose target has gone
+// missing, because niri treats a missing include as a fatal parse error.
+//
+// Order matters.
+//   orbit.kdl           Orbit's session: layout, rules, animations, keymap.
+//   noctalia.kdl        Noctalia's palette. After Orbit so colours win.
+//   orbit-overrides.kdl The few structural fields that must survive the palette.
+//   monitor.kdl         This machine's outputs, written by nwg-displays.
+//   local.kdl           Anything else of yours: workspaces, personal binds.
+//
+// monitor.kdl is nwg-displays' own default path for niri, so arranging monitors
+// is the same GUI step as under Hyprland — and it must stay a writable regular
+// file, because nwg-displays replaces a read-only symlink it finds there.
+//
+// Edit local.kdl for anything machine-specific that is not a monitor.
+// Everything else is replaced wholesale by bootstrap/deploy.
+
+include "orbit.kdl"
+include "noctalia.kdl"
+include "orbit-overrides.kdl"
+include "monitor.kdl"
+include "local.kdl"

@@ -10,23 +10,25 @@ import subprocess
 from pathlib import Path
 
 def monitors() -> list[dict]:
+    """Return the live monitors, in the shape both compositors report through
+    orbit-compositor: name, make/model/serial identity, and logical geometry."""
     try:
         result = subprocess.run(
-            ["hyprctl", "monitors", "-j"],
+            ["orbit-compositor", "monitors"],
             check=True,
             capture_output=True,
             text=True,
         )
         value = json.loads(result.stdout)
     except FileNotFoundError as error:
-        raise SystemExit("hyprctl is not installed or not in PATH") from error
+        raise SystemExit("orbit-compositor is not installed or not in PATH") from error
     except subprocess.CalledProcessError as error:
-        raise SystemExit(error.stderr.strip() or "Hyprland is not running") from error
+        raise SystemExit(error.stderr.strip() or "No compositor is running") from error
     except json.JSONDecodeError as error:
-        raise SystemExit(f"Could not parse Hyprland monitor data: {error}") from error
+        raise SystemExit(f"Could not parse monitor data: {error}") from error
 
     if not isinstance(value, list):
-        raise SystemExit("Hyprland returned an invalid monitor list")
+        raise SystemExit("The compositor returned an invalid monitor list")
     return value
 
 

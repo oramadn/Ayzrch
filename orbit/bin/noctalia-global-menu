@@ -182,8 +182,8 @@ def menu_for(candidate, output, atspi, dbus_menu):
 
 
 def snapshot(focus_address=""):
-    clients, clients_ok = run_json("hyprctl", "clients", "-j")
-    monitors, monitors_ok = run_json("hyprctl", "monitors", "-j")
+    clients, clients_ok = run_json("orbit-compositor", "clients")
+    monitors, monitors_ok = run_json("orbit-compositor", "monitors")
     clients = [client for client in clients if client.get("mapped") and not client.get("hidden")]
     monitors = [monitor for monitor in monitors if not monitor.get("disabled")]
     state = load_state()

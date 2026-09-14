@@ -1,21 +1,55 @@
 #!/usr/bin/env bash
 
+# Session bootstrap for both Orbit compositors.
+#
+# The sequence is the same either way — import the graphical environment, wait
+# for the compositor to answer, start the session target, run the login
+# transition, adapt appearance, then repair the portal binding. What differs is
+# only which variable identifies the session, which target owns the services,
+# which backend serves the portal, and whether Home workspaces need allocating,
+# so those four are resolved once here and the rest of the script is shared.
+
 set -euo pipefail
 
-readonly SESSION_TARGET=hyprland-session.target
 readonly DESKTOP_PORTAL=xdg-desktop-portal.service
-readonly HYPRLAND_PORTAL=xdg-desktop-portal-hyprland.service
-readonly SESSION_ENVIRONMENT=(
-    PATH
-    WAYLAND_DISPLAY
-    HYPRLAND_INSTANCE_SIGNATURE
-    XDG_CURRENT_DESKTOP
-    XDG_SESSION_DESKTOP
-    XDG_SESSION_TYPE
-    XDG_SESSION_ID
-    XDG_RUNTIME_DIR
-    QT_QPA_PLATFORMTHEME
-)
+
+if [[ -n "${NIRI_SOCKET:-}" ]]; then
+    readonly COMPOSITOR=niri
+    readonly SESSION_TARGET=niri-session.target
+    # niri's shipped portals.conf prefers the GNOME backend and falls back to
+    # GTK. Restarting whichever one is actually present is what rebinds it to
+    # this compositor instance.
+    readonly COMPOSITOR_PORTALS=(
+        xdg-desktop-portal-gnome.service
+        xdg-desktop-portal-gtk.service
+    )
+    readonly SESSION_ENVIRONMENT=(
+        PATH
+        WAYLAND_DISPLAY
+        NIRI_SOCKET
+        XDG_CURRENT_DESKTOP
+        XDG_SESSION_DESKTOP
+        XDG_SESSION_TYPE
+        XDG_SESSION_ID
+        XDG_RUNTIME_DIR
+        QT_QPA_PLATFORMTHEME
+    )
+else
+    readonly COMPOSITOR=hyprland
+    readonly SESSION_TARGET=hyprland-session.target
+    readonly COMPOSITOR_PORTALS=(xdg-desktop-portal-hyprland.service)
+    readonly SESSION_ENVIRONMENT=(
+        PATH
+        WAYLAND_DISPLAY
+        HYPRLAND_INSTANCE_SIGNATURE
+        XDG_CURRENT_DESKTOP
+        XDG_SESSION_DESKTOP
+        XDG_SESSION_TYPE
+        XDG_SESSION_ID
+        XDG_RUNTIME_DIR
+        QT_QPA_PLATFORMTHEME
+    )
+fi
 
 log() {
     printf 'orbit-session-bootstrap: %s\n' "$*"
@@ -45,6 +79,13 @@ import_session_environment() {
 }
 
 current_compositor_ready() {
+    if [[ "$COMPOSITOR" == niri ]]; then
+        # The socket answering a query is the readiness signal; niri publishes
+        # no instance list to cross-check the session against.
+        niri msg -j version >/dev/null 2>&1
+        return
+    fi
+
     local instances
     instances="$(hyprctl instances -j 2>/dev/null)" || return 1
     jq -e \
@@ -55,15 +96,15 @@ current_compositor_ready() {
 }
 
 wait_for_current_compositor() {
-    local attempt
-    [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -n "${WAYLAND_DISPLAY:-}" ]] || {
+    local attempt identity="${HYPRLAND_INSTANCE_SIGNATURE:-${NIRI_SOCKET:-}}"
+    [[ -n "$identity" && -n "${WAYLAND_DISPLAY:-}" ]] || {
         printf 'orbit-session-bootstrap: current Wayland session environment is incomplete\n' >&2
         return 1
     }
 
     for ((attempt = 1; attempt <= 40; attempt++)); do
         if current_compositor_ready; then
-            log "current compositor is ready (${HYPRLAND_INSTANCE_SIGNATURE})"
+            log "current compositor is ready (${COMPOSITOR}: ${identity})"
             return 0
         fi
         sleep 0.25
@@ -74,7 +115,22 @@ wait_for_current_compositor() {
 }
 
 configure_home_workspaces() {
+    # Home workspace blocks are Hyprland policy: they give a flat workspace list
+    # the per-monitor hierarchy niri already has in its own workspaces.
+    [[ "$COMPOSITOR" == hyprland ]] || return 0
     "$HOME/.local/bin/orbit-home-workspaces"
+}
+
+installed_portal() {
+    local unit state
+    for unit in "${COMPOSITOR_PORTALS[@]}"; do
+        state="$(systemctl --user show --value --property=LoadState "$unit" 2>/dev/null || true)"
+        if [[ -n "$state" && "$state" != not-found ]]; then
+            printf '%s\n' "$unit"
+            return 0
+        fi
+    done
+    return 1
 }
 
 portal_signature() {
@@ -91,27 +147,32 @@ portal_signature() {
 }
 
 portal_bound_to_current_compositor() {
-    local state pid signature
-    state="$(systemctl --user is-active "$HYPRLAND_PORTAL" 2>/dev/null || true)"
+    local unit="$1" state pid signature
+    state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
     [[ "$state" == active ]] || return 1
 
-    pid="$(systemctl --user show --value --property=MainPID "$HYPRLAND_PORTAL")"
+    # Only Hyprland stamps its instance into the backend's environment, which is
+    # what makes a stale binding detectable there. For niri, an active backend
+    # after the restart is the whole of the check.
+    [[ "$COMPOSITOR" == hyprland ]] || return 0
+
+    pid="$(systemctl --user show --value --property=MainPID "$unit")"
     [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] || return 1
     signature="$(portal_signature "$pid" || true)"
     [[ "$signature" == "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
 }
 
 wait_for_portal_rebind() {
-    local attempt
+    local unit="$1" attempt
     for ((attempt = 1; attempt <= 20; attempt++)); do
-        if portal_bound_to_current_compositor; then
-            log "Hyprland portal is bound to the current compositor"
+        if portal_bound_to_current_compositor "$unit"; then
+            log "$unit is bound to the current compositor"
             return 0
         fi
         sleep 0.25
     done
 
-    printf 'orbit-session-bootstrap: Hyprland portal did not bind to the current compositor\n' >&2
+    printf 'orbit-session-bootstrap: %s did not bind to the current compositor\n' "$unit" >&2
     return 1
 }
 
@@ -136,7 +197,13 @@ bootstrap_orbit_appearance() {
     fi
 }
 
-for command in dbus-update-activation-environment hyprctl jq systemctl; do
+required_commands=(dbus-update-activation-environment jq systemctl)
+if [[ "$COMPOSITOR" == hyprland ]]; then
+    required_commands+=(hyprctl)
+else
+    required_commands+=(niri)
+fi
+for command in "${required_commands[@]}"; do
     command -v "$command" >/dev/null 2>&1 || {
         printf 'orbit-session-bootstrap: required command not found: %s\n' "$command" >&2
         exit 1
@@ -158,16 +225,20 @@ bootstrap_orbit_appearance
 
 # A failed unit needs its start-limit state cleared before one deliberate
 # restart. No retry loop is used here; systemd remains the process owner.
-if systemctl --user is-failed --quiet "$HYPRLAND_PORTAL"; then
-    log "clearing the previous Hyprland portal failure state"
-    systemctl --user reset-failed "$HYPRLAND_PORTAL"
-fi
-if systemctl --user is-failed --quiet "$DESKTOP_PORTAL"; then
-    log "clearing the previous desktop portal failure state"
-    systemctl --user reset-failed "$DESKTOP_PORTAL"
-fi
+compositor_portal="$(installed_portal || true)"
+for unit in "$compositor_portal" "$DESKTOP_PORTAL"; do
+    [[ -n "$unit" ]] || continue
+    if systemctl --user is-failed --quiet "$unit"; then
+        log "clearing the previous failure state for $unit"
+        systemctl --user reset-failed "$unit"
+    fi
+done
 log "refreshing the desktop portal"
 systemctl --user restart "$DESKTOP_PORTAL"
-log "rebinding the Hyprland portal backend"
-systemctl --user restart "$HYPRLAND_PORTAL"
-wait_for_portal_rebind
+if [[ -n "$compositor_portal" ]]; then
+    log "rebinding the portal backend ($compositor_portal)"
+    systemctl --user restart "$compositor_portal"
+    wait_for_portal_rebind "$compositor_portal"
+else
+    log "no compositor portal backend is installed; only the desktop portal was refreshed"
+fi

@@ -1,0 +1,32 @@
+#!/bin/sh
+# Lock entry point: Orbit's full lock choreography (workspace staging, chrome
+# hide, wallpaper exit) with Noctalia's lock screen instead of hyprlock.
+#
+# Deliberately not `loginctl lock-session`: Noctalia answers the logind Lock
+# signal itself and locks immediately, racing this animated transition. Driving
+# the transition directly keeps a single locker, and it engages Noctalia's lock
+# at the end through orbit-noctalia-lock.
+#
+# orbit-session-transition returns once the session has been unlocked and its
+# unlock sequence has played, so renderer recovery is chained here. hypridle's
+# unlock_cmd cannot be used for that: it fires on the logind Unlock signal, and
+# this path deliberately never goes through logind.
+#
+# Compositor-neutral: the Hyprland session reaches it through
+# config/hypr/scripts/animate-lock and the niri session binds Super+L to it.
+
+set -eu
+
+ORBIT_HYPRLOCK_BIN="$HOME/.local/bin/orbit-noctalia-lock"
+export ORBIT_HYPRLOCK_BIN
+
+status=0
+"$HOME/.local/bin/orbit-session-transition" lock || status=$?
+
+# The wallpaper engine is optional; its recovery helper ships with the Hyprland
+# session and is skipped wherever it is not deployed.
+if [ -x "$HOME/.config/hypr/scripts/wallpaper-recover" ]; then
+    "$HOME/.config/hypr/scripts/wallpaper-recover" || true
+fi
+
+exit "$status"

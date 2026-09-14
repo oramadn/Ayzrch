@@ -1,0 +1,24 @@
+[Unit]
+Description=niri graphical session
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+Wants=syncthing.service
+
+# The session services that are not Hyprland policy. These units declare
+# WantedBy=hyprland-session.target in their own [Install] sections, which is
+# what kept them from ever starting under niri: the wallpaper daemon, so the
+# desktop has a wallpaper rather than the compositor's grey; the idle daemon,
+# so the session locks; the PolicyKit agent, so graphical authentication works
+# at all; and LocalSend, which follows the session it was enabled for.
+Wants=awww-daemon.service
+Wants=hypridle.service
+Wants=hyprpolkitagent.service
+Wants=localsend.service
+
+After=graphical-session-pre.target
+Before=graphical-session.target
+
+# Deliberately narrower than hyprland-session.target. The units it omits —
+# workspace-alt-tab-input, workspace-alt-tab-release and new-workspace-apps —
+# exist to give Hyprland the overview and workspace allocation that niri
+# performs natively, so under niri there is nothing for them to do.

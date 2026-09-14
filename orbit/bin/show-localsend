@@ -10,7 +10,7 @@ declare -a session_environment=()
 while IFS= read -r variable; do
     [[ "$variable" == *=* ]] || continue
     case "$variable" in
-        DISPLAY=*|WAYLAND_DISPLAY=*|XDG_CURRENT_DESKTOP=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*|HYPRLAND_INSTANCE_SIGNATURE=*)
+        DISPLAY=*|WAYLAND_DISPLAY=*|XDG_CURRENT_DESKTOP=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*|HYPRLAND_INSTANCE_SIGNATURE=*|NIRI_SOCKET=*)
             session_environment+=("$variable")
             ;;
     esac

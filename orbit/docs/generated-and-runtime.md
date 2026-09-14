@@ -7,7 +7,7 @@ Generated or runtime files include:
 - Noctalia Hyprland, GTK, Qt/KDE, WezTerm, and wallpaper-palette outputs;
 - HyprQt6Engine configuration and WezTerm configuration outputs maintained by
   the deployed Orbit templates;
-- Orbit semantic, GTK, Kitty, shape, and Hyprlock adapters;
+- Orbit semantic, GTK, Kitty, herdr, shape, and Hyprlock adapters;
 - `nwg-displays` monitor configuration;
 - Wallpaper Engine status, FIFOs, and Hyprlock background output;
 - systemd, Noctalia, browser, editor, and test state;
@@ -26,4 +26,10 @@ Noctalia outputs
       -> orbit-theme apply noctalia
           -> semantic.json and active Orbit adapters
           -> Hyprlock adapter
+          -> herdr [theme.custom], then `herdr server reload-config`
 ```
+
+`semantic.json` is a live input as well as an output: the QuickShell surfaces
+read it through `ThemeAdapter`, alongside `config/hypr/appearance.toml` for shape
+and typography. Both are watched, so the global menu and the keyboard cheatsheet
+repaint with the rest of the desktop when the palette changes.

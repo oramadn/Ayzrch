@@ -23,6 +23,11 @@ HOME = Path(os.environ.get("HOME", "")).expanduser()
 STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "orbit/migrations"
 EXCLUDED_CONFIG = {"zen"}
 GENERATED_CONFIG = {"hypr/hyprqt6engine.conf", "wezterm/wezterm.lua"}
+# Copy-once seeds: deploy installs them when absent and never touches them
+# again, because their whole purpose is to be edited. config.kdl is the niri
+# include list, which Noctalia appends its palette include to; local.kdl holds
+# this machine's outputs.
+SEEDED_CONFIG = {"niri/config.kdl", "niri/local.kdl"}
 EXCLUDED_BIN = {
     "configure-localsend", "configure-zen", "gpu-screen-recorder-control",
     "show-localsend",
@@ -50,7 +55,8 @@ def authored_entries():
         relative = source.relative_to(REPO / "config")
         if not source.is_file() or relative.parts[0] in EXCLUDED_CONFIG or relative.as_posix() in GENERATED_CONFIG or relative.as_posix() == "qt6ct/qt6ct.conf" or (relative.parts[0] == "hypr" and len(relative.parts) > 1 and relative.parts[1] in {"scripts", "shaders", "patches"}):
             continue
-        add(source, HOME / ".config" / relative)
+        add(source, HOME / ".config" / relative,
+            "seed" if relative.as_posix() in SEEDED_CONFIG else "link")
     for root in (REPO / "config/hypr/scripts", REPO / "config/hypr/shaders", REPO / "config/hypr/patches"):
         for source in sorted(root.rglob("*")):
             if source.is_file():

@@ -9,16 +9,40 @@ Arch Linux setup scripts. `./setup.sh` runs every `scripts/*.sh` in order;
 
 `scripts/15-orbit.sh` installs the Orbit desktop: **Hyprland** compositor,
 **Noctalia** shell (bar, launcher, notifications, and the source of every colour
-in the session), a **QuickShell** global menu, four Hyprland plugins, and an
-animated shader wallpaper. It is vendored from
+in the session), a **QuickShell** global menu and four Hyprland plugins. It is
+vendored from
 [CleanShirtUK/dotfiles](https://github.com/CleanShirtUK/dotfiles) into `orbit/`,
 adapted from Fedora to Arch — see [`orbit/ATTRIBUTION.md`](orbit/ATTRIBUTION.md)
 for provenance and every local modification.
 
 ```sh
-scripts/15-orbit.sh                # packages, deploy, plugins, wallpaper engine
+scripts/15-orbit.sh                # packages, deploy, plugins
 scripts/16-orbit-integrations.sh   # Zen theming, LocalSend, GPU Screen Recorder
+scripts/17-awww-wallpaper.sh       # awww renders the wallpaper Noctalia picks
+scripts/18-niri.sh                 # the same desktop on niri, as a second session
 ```
+
+### Two compositors
+
+`scripts/18-niri.sh` adds an **Orbit (niri)** session alongside Hyprland. Both
+are installed; you pick one in Ly at login. The shell, the palette, every theme
+adapter, the global menu and the cheatsheet are shared unchanged — what changes
+is window management, which niri does natively instead of through Orbit's
+Hyprland scripts. See [`orbit/docs/niri-session.md`](orbit/docs/niri-session.md)
+for exactly what is shared, what differs, and why.
+
+Monitors work the same way in both sessions: run `nwg-displays`. It supports
+niri natively, writing `~/.config/niri/monitor.kdl` instead of
+`~/.config/hypr/monitors.lua` and asking niri to reload, so the layout applies
+live. Hyprland's four plugins (Hyprglass, HyprWindowShade, dynamic-cursors,
+ScrollOverview) have no niri equivalent; niri's own blur, shadow, rounding and
+overview cover what they can.
+
+Orbit's own wallpaper engine is not installed: its persistent GPU context
+deadlocked on NVIDIA explicit-sync fences. `scripts/17-awww-wallpaper.sh` puts
+[awww](https://github.com/LGFae/awww) (CPU shared-memory buffers, no GPU
+context) behind Noctalia's picker instead — see
+[`docs/awww-live-wallpaper.md`](docs/awww-live-wallpaper.md).
 
 The install is non-destructive: existing `~/.config/{hypr,kitty,wezterm}` are
 moved to `*.pre-orbit-<date>` first, and Orbit's own deploy refuses to overwrite
@@ -26,9 +50,11 @@ any unrelated file.
 
 ### After installing
 
-1. Log out, then pick **Hyprland** in Ly — not `hyprland-uwsm`.
-2. Noctalia's setup wizard runs on first login. Pick a wallpaper; the whole
-   palette (window borders, GTK, Qt, terminals, lock screen) is derived from it.
+1. Log out, then pick **Hyprland** in Ly — not `hyprland-uwsm`. If you also ran
+   `scripts/18-niri.sh`, **Orbit (niri)** is the other entry.
+2. Noctalia's setup wizard runs on first login. Pick a wallpaper (the picker
+   browses `~/Pictures`); the whole palette (window borders, GTK, Qt,
+   terminals, lock screen) is derived from it, and awww draws it.
 3. Run `nwg-displays` to arrange monitors. It writes `~/.config/hypr/monitors.lua`,
    which is machine-local and deliberately not tracked here.
 4. Restart Zen Browser to pick up its chrome overrides. Launch LocalSend once,
@@ -69,6 +95,12 @@ display. Noctalia draws its bar and dock on every monitor.
 | `Super+Shift+E` | Emoji picker (rofi) |
 | `Super+Shift+R` / `Super+Shift+Z` | Record / save the last 30s replay |
 | Media / volume / brightness keys | wpctl, playerctl, brightnessctl |
+
+The niri session binds the same keys to niri's native actions, and adds four for
+columns, which a master layout has no use for: `Super+,` / `Super+.` move a
+window in and out of a column, `Super+R` cycles column width, and
+`Super+Shift+\` centres the column. `Super+/` shows the same cheatsheet, built
+from whichever compositor's configuration is live.
 
 Workspaces `1`, `6`, `11`… are each monitor's semantic Home, assigned to whatever
 is connected at login; the absolute `Super+1..0` binds address the same numbers

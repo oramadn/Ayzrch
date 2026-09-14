@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Noctalia `wallpaper_changed` hook: hand the picked wallpaper to awww.
+set -u
+
+path="${NOCTALIA_WALLPAPER_PATH:-}"
+connector="${NOCTALIA_WALLPAPER_CONNECTOR:-}"
+[[ -n "$path" ]] || exit 0
+
+target=()
+[[ -n "$connector" ]] && target=(-o "$connector")
+
+# The daemon may still be starting right after login.
+for _ in $(seq 1 25); do
+    awww query >/dev/null 2>&1 && break
+    sleep 0.2
+done
+
+case "$path" in
+    color:*)
+        # Noctalia solid colours are "color:#RRGGBB"; awww wants bare RRGGBB.
+        hex="${path#color:#}"
+        logger -t awww-noctalia-hook "clear ${connector:-all} ${hex}"
+        exec awww clear "${target[@]}" "${hex:0:6}"
+        ;;
+esac
+
+[[ -r "$path" ]] || { logger -t awww-noctalia-hook "unreadable: $path"; exit 0; }
+
+logger -t awww-noctalia-hook "img ${connector:-all} $path"
+exec awww img "${target[@]}" \
+    --resize crop \
+    --transition-type fade \
+    --transition-duration 1 \
+    --transition-fps 60 \
+    "$path"

@@ -14,7 +14,18 @@ session_sound="$HOME/.local/bin/play-session-sound"
 wallpaper_status="$HOME/.cache/orbit-wallpaper-engine/status"
 wallpaper_control="$HOME/.cache/orbit-wallpaper-engine/control"
 wallpaper_events="$HOME/.cache/orbit-wallpaper-engine/events"
-session_target=hyprland-session.target
+# Workspace staging is Hyprland's visual transition surface: windows are parked
+# on a private workspace so the compositor animates the scene away. niri has no
+# equivalent that can be driven from outside, so under niri the transition keeps
+# its sound, chrome and wallpaper phases and the staging phases are absent
+# rather than failing.
+if [ -n "${NIRI_SOCKET:-}" ]; then
+    compositor=niri
+    session_target=niri-session.target
+else
+    compositor=hyprland
+    session_target=hyprland-session.target
+fi
 hyprlock_bin="${ORBIT_HYPRLOCK_BIN:-hyprlock}"
 wallpaper_reader_pid=""
 wallpaper_event_file=""
@@ -59,8 +70,51 @@ wait_noctalia_ready() {
     return 1
 }
 
+# The Orbit Wallpaper Engine is optional, and on installs that render wallpaper
+# another way — awww, for one — its unit sits failed or inactive forever. Such a
+# unit will never become ready inside a deadline, so polling one only buys dead
+# air: every transition paid two of these waits, which is most of the pause
+# between the shell chrome disappearing and the lock actually engaging.
+# Hyprland animates the lock through workspace staging: the windows slide away
+# and the compositor draws the motion. niri has no equivalent that can be driven
+# from outside, but it has something better suited — do-screen-transition freezes
+# the current frame, and cross-fades from it to whatever is on screen once the
+# delay elapses. It is issued as late as possible — immediately before the locker
+# runs — so the frame it captures is the untouched desktop and the fade lands on
+# the lock screen itself, rather than on a desktop caught mid-teardown.
+#
+# The delay has to outlast the lock surface coming up. Overshooting only holds
+# the frozen frame a little longer; undershooting shows the bare desktop.
+# Hyprland hides the bar and dock for the lock because hyprlock does not reliably
+# sit above layer-shell surfaces. Under niri the lock is an Overlay-layer surface
+# and the bar and dock are Top, so the lock already covers them: hiding them buys
+# nothing and costs a visible Noctalia fade-out that competes with the screen
+# transition instead of being hidden behind it.
+chrome() {
+    [ "$compositor" = hyprland ] || return 0
+    "$session_chrome" "$@"
+}
+
+screen_transition() {
+    [ "$compositor" = niri ] || return 0
+    niri msg action do-screen-transition \
+        --delay-ms "${ORBIT_SCREEN_TRANSITION_MS:-150}" >/dev/null 2>&1 || true
+}
+
+wallpaper_engine_starting_or_running() {
+    # SubState, not ActiveState: a unit whose binary is missing crash-loops under
+    # Restart=on-failure and reports ActiveState=activating forever, with
+    # SubState=auto-restart. That is not an engine about to become ready.
+    case "$(systemctl --user show --value --property=SubState \
+        orbit-wallpaper-engine.service 2>/dev/null)" in
+        running|start|start-pre|start-post) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 wait_wallpaper_ready() {
     local deadline="$1" readiness
+    wallpaper_engine_starting_or_running || return 1
     while [ "$(date +%s)" -lt "$deadline" ]; do
         if systemctl --user is-active --quiet orbit-wallpaper-engine.service \
             && [ -f "$wallpaper_status" ]; then
@@ -129,6 +183,7 @@ wallpaper_transition() {
 }
 
 stage_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "workspace-exit-dispatch-ms=$(now_ms)"
     "$staging" exit >/dev/null 2>&1 && {
         log "workspace-exit-complete-ms=$(now_ms)"
@@ -140,6 +195,7 @@ stage_workspaces() {
 }
 
 restore_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "workspace-enter-dispatch-ms=$(now_ms)"
     "$staging" reset >/dev/null 2>&1 || {
         log 'workspace restoration failed'
@@ -150,6 +206,7 @@ restore_workspaces() {
 }
 
 stage_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "session-workspace-lock-dispatch-ms=$(now_ms)"
     "$session_workspaces" lock-start >/dev/null && {
         log "session-workspace-lock-complete-ms=$(now_ms)"
@@ -161,6 +218,7 @@ stage_lock_workspaces() {
 }
 
 wait_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     "$session_workspaces" lock-wait >/dev/null 2>&1 || {
         log 'session workspace lock wait failed'
         return 1
@@ -168,6 +226,7 @@ wait_lock_workspaces() {
 }
 
 restore_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "session-workspace-unlock-dispatch-ms=$(now_ms)"
     "$session_workspaces" unlock >/dev/null 2>&1 || {
         log 'session workspace restoration failed'
@@ -191,7 +250,7 @@ run_login() {
     set_state preparing login
     wait_noctalia_ready "$(deadline_after 5)" || log 'Noctalia readiness unavailable; continuing'
     "$session_sound" desktop-login >/dev/null 2>&1 &
-    "$session_chrome" intro || log 'Noctalia session chrome intro unavailable'
+    chrome intro || log 'Noctalia session chrome intro unavailable'
     wait_wallpaper_ready "$(deadline_after 2)" || log 'Wallpaper readiness unavailable during login'
     set_state transitioning login
     restore_lock_workspaces || log 'login workspace restoration failed'
@@ -204,10 +263,11 @@ run_login() {
 
 run_unlock() {
     local wallpaper_ok=0
+    screen_transition
     "$session_sound" desktop-unlock >/dev/null 2>&1 &
     wallpaper_transition_start intro 8 && wallpaper_ok=1 || \
         log 'Wallpaper intro unavailable during unlock'
-    "$session_chrome" intro || log 'Noctalia session chrome intro unavailable during unlock'
+    chrome intro || log 'Noctalia session chrome intro unavailable during unlock'
     set_state preparing unlock
     wait_wallpaper_ready "$(deadline_after 2)" || log 'Wallpaper readiness unavailable during unlock'
     set_state transitioning unlock
@@ -229,12 +289,13 @@ run_lock() {
     set_state transitioning lock
     stage_lock_workspaces || log 'lock staging unavailable; lock continues'
     "$session_sound" desktop-lock >/dev/null 2>&1 &
-    "$session_chrome" hide-start || log 'Noctalia session chrome exit unavailable during lock'
+    chrome hide-start || log 'Noctalia session chrome exit unavailable during lock'
     wait_lock_workspaces || log 'lock workspace wait unavailable; lock continues'
     wallpaper_transition_start exit 3 && wallpaper_ok=1 || \
         log 'Wallpaper exit unavailable; lock continues'
     [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
 
+    screen_transition
     for attempt in 1 2; do
         "$hyprlock_bin"
         hyprlock_status=$?
@@ -245,7 +306,7 @@ run_lock() {
     if [ "$hyprlock_status" -ne 0 ]; then
         log 'Hyprlock failed twice; restoring interactive desktop'
         restore_lock_workspaces || true
-        "$session_chrome" intro || true
+        chrome intro || true
         set_state interactive hyprlock-failed
         return 1
     fi
@@ -257,7 +318,7 @@ run_terminal_action() {
     local action="$1" dry_run="${2:-0}" wallpaper_ok=0
     set_state preparing "$action"
     if [ "$action" = logout ]; then
-        "$session_chrome" exit || log 'Noctalia session chrome exit unavailable'
+        chrome exit || log 'Noctalia session chrome exit unavailable'
     fi
     wait_wallpaper_ready "$(deadline_after 2)" || log "Wallpaper readiness unavailable during $action"
     set_state transitioning "$action"
@@ -269,7 +330,7 @@ run_terminal_action() {
 
     if [ "$dry_run" = 1 ]; then
         restore_workspaces || true
-        [ "$action" = logout ] && "$session_chrome" intro || true
+        [ "$action" = logout ] && chrome intro || true
         set_state interactive "dry-run wallpaper=$wallpaper_ok"
         printf 'DRY_RUN_READY_BEFORE_SESSION_EXIT action=%s\n' "$action"
         return 0
@@ -283,7 +344,7 @@ run_terminal_action() {
     case "$action" in
         logout)
             if ! loginctl terminate-session "${XDG_SESSION_ID:?}"; then
-                "$session_chrome" intro || true
+                chrome intro || true
                 set_state interactive logout-failed
                 return 1
             fi

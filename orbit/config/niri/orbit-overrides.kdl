@@ -1,0 +1,15 @@
+// Structural fields that must outlive Noctalia's palette include.
+//
+// Noctalia's built-in niri template writes a layout block carrying focus-ring
+// and border colours. Orbit draws window state with the border alone, as it
+// does on Hyprland, so the ring is turned off again here — after the palette —
+// rather than relying on niri's include merge to leave an earlier `off` alone.
+//
+// Keep this file to fields that are genuinely in that position. Everything else
+// belongs in orbit.kdl, where it reads in context.
+
+layout {
+    focus-ring {
+        off
+    }
+}

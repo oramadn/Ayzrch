@@ -32,6 +32,7 @@ GTK3_ACTIVE = Path.home() / ".config/gtk-3.0/orbit.css"
 GTK4_ACTIVE = Path.home() / ".config/gtk-4.0/orbit.css"
 KITTY_ACTIVE = Path.home() / ".config/kitty/themes/orbit.conf"
 WEZTERM_CONFIG_ACTIVE = Path.home() / ".config/wezterm/wezterm.lua"
+HERDR_ACTIVE = Path.home() / ".config/herdr/config.toml"
 GTK3_SHAPE_ACTIVE = HOME / ".config/gtk-3.0/orbit-shape.css"
 GTK4_SHAPE_ACTIVE = HOME / ".config/gtk-4.0/orbit-shape.css"
 HYPRQT6ENGINE_DEFAULTS = {
@@ -337,6 +338,10 @@ def gtk_css(values: dict, headerbar: str, opacities: dict[str, float], typograph
         f"@define-color secondary_sidebar_fg_color {values['text']};",
         f"@define-color overview_bg_color {values['surface']};",
         f"@define-color overview_fg_color {values['text']};",
+        "@define-color theme_bg_color @orbit_window_background;",
+        f"@define-color theme_fg_color {values['text']};",
+        "@define-color theme_base_color @orbit_window_background;",
+        f"@define-color theme_text_color {values['text']};",
         "@define-color theme_selected_bg_color @accent_bg_color;",
         "@define-color theme_selected_fg_color @accent_fg_color;",
         "@define-color theme_unfocused_fg_color @window_fg_color;",
@@ -355,6 +360,20 @@ def gtk_css(values: dict, headerbar: str, opacities: dict[str, float], typograph
         "    background-color: @orbit_menu;",
         "    background-image: none;",
         "}",
+        "",
+        "/* Surface translucency is NOT emitted here.",
+        " *",
+        " * [transparency.surfaces] in appearance.toml asks for a window background",
+        " * at 0.2 alpha. Setting the colour tokens alone never applied it, because",
+        " * GTK paints an opaque base beneath them, so the values went unexercised",
+        " * for as long as the cascade was broken. Overriding the paint does apply",
+        " * them — and 0.2 renders a settings dialog as 80% transparent, with",
+        " * whatever is behind it showing through the labels. nwg-displays was",
+        " * unreadable.",
+        " *",
+        " * The tokens below are still emitted, so anything that composites them",
+        " * itself gets Orbit's colours. Reinstating the paint override needs an",
+        " * alpha chosen against a real window first, not the authored default. */",
         "",
         "/* PARTIAL Display adapter: GTK's native global font remains Body. */",
         ".heading,",
@@ -554,6 +573,7 @@ def generate(name: str) -> Path:
     write_gtk_artifacts(output, values, opacities, typography)
     write_shape_artifacts(output, shape)
     write_atomic(output / "kitty.conf", kitty_conf(colors, typography))
+    write_atomic(output / "herdr.toml", herdr_theme_section(values))
     print(output)
     return output
 
@@ -856,6 +876,149 @@ def _hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
     return tuple(int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5))
 
 
+HERDR_HUE_ANCHORS = {
+    "peach": 20.0,
+    "yellow": 45.0,
+    "green": 140.0,
+    "teal": 172.0,
+    "blue": 215.0,
+    "mauve": 277.0,
+}
+
+
+def _rgb01_to_hex(channels) -> str:
+    return "#" + "".join(f"{round(255 * max(0.0, min(1.0, channel))):02x}" for channel in channels)
+
+
+def _mix(base: str, other: str, amount: float) -> str:
+    """Blend `amount` of `other` into `base`, in sRGB."""
+    return _rgb01_to_hex(
+        start + (end - start) * amount
+        for start, end in zip(_hex_to_rgb01(base), _hex_to_rgb01(other))
+    )
+
+
+def _hue_anchored(reference: str, degrees: float) -> str:
+    """`reference`'s lightness and saturation, moved onto a fixed hue."""
+    _hue, lightness, saturation = colorsys.rgb_to_hls(*_hex_to_rgb01(reference))
+    saturation = max(0.35, min(0.90, saturation))
+    lightness = max(0.50, min(0.82, lightness))
+    return _rgb01_to_hex(colorsys.hls_to_rgb(degrees / 360.0, lightness, saturation))
+
+
+def herdr_theme_colors(values: dict) -> dict[str, str]:
+    """Noctalia's palette expressed as herdr's sixteen theme tokens.
+
+    The two halves are derived differently, on purpose. The chrome tokens —
+    the surfaces, the overlays herdr draws pane borders with, and the two text
+    weights — are the wallpaper's own colours. They are mixed into an
+    elevation ramp because Noctalia publishes a single background rather than
+    the several shades a TUI needs to separate a panel from a pane.
+
+    The hue tokens cannot be taken the same way. herdr spends them on agent
+    and pane state, and Noctalia's terminal palette is close to monochrome:
+    its green, yellow and cyan are all the same lilac as the accent, so a
+    direct mapping would leave every state looking identical. Each hue token
+    therefore keeps its own hue and borrows only the accent's lightness and
+    saturation -- the set tracks how vivid or muted the wallpaper is while
+    staying legible as distinct states. `red` is the exception: Noctalia
+    publishes a real error colour, which is what herdr spends `red` on.
+    """
+    background = values["window_background"]
+    text = values["text"]
+    accent = values["accent"]
+    tokens = {
+        "surface_dim": background,
+        "panel_bg": _mix(background, text, 0.045),
+        "surface0": _mix(background, text, 0.08),
+        "surface1": _mix(background, text, 0.14),
+        "overlay0": _mix(background, text, 0.30),
+        "overlay1": _mix(background, text, 0.42),
+        "subtext0": _mix(text, background, 0.38),
+        "text": text,
+        "accent": accent,
+        "red": values["error"],
+    }
+    for token, degrees in HERDR_HUE_ANCHORS.items():
+        tokens[token] = _hue_anchored(accent, degrees)
+    return tokens
+
+
+def herdr_theme_section(values: dict) -> str:
+    lines = [
+        "[theme.custom]",
+        "# Generated by orbit-theme from Noctalia's active palette. Rewritten",
+        "# whenever the wallpaper colours change, so edit the palette, not this.",
+    ]
+    lines += [f'{token} = "{value}"' for token, value in herdr_theme_colors(values).items()]
+    return "\n".join(lines) + "\n"
+
+
+def update_toml_section(text: str, section: str, body: list[str]) -> str:
+    """Replace one TOML table's body, leaving every other table untouched."""
+    header = f"[{section}]"
+    lines = text.splitlines()
+    output: list[str] = []
+    index = 0
+    replaced = False
+    while index < len(lines):
+        if lines[index].strip() != header:
+            output.append(lines[index])
+            index += 1
+            continue
+        output.append(header)
+        output.extend(body)
+        index += 1
+        # Drop the previous body: everything up to the next table header.
+        while index < len(lines) and not lines[index].lstrip().startswith("["):
+            index += 1
+        if index < len(lines):
+            # Keep the table that follows separated, so a hand-edited file does
+            # not lose its spacing to repeated regeneration.
+            output.append("")
+        replaced = True
+    if not replaced:
+        if output and output[-1].strip():
+            output.append("")
+        output.append(header)
+        output.extend(body)
+    return "\n".join(output).rstrip() + "\n"
+
+
+def herdr_command() -> str | None:
+    candidate = HOME / ".local/bin/herdr"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    # herdr installs itself under ~/.local/bin, which is not always on the PATH
+    # a Noctalia hook inherits; fall back to the PATH for other install sites.
+    return shutil.which("herdr")
+
+
+def update_herdr_theme(values: dict) -> None:
+    """Point herdr's theme at the wallpaper palette, and reload a running server.
+
+    config.toml is hand-edited -- it carries the prefix key and the onboarding
+    flag -- so only the generated table is replaced.
+    """
+    command = herdr_command()
+    if command is None:
+        return
+    body = herdr_theme_section(values).splitlines()[1:]
+    try:
+        text = HERDR_ACTIVE.read_text()
+    except OSError:
+        text = ""
+    write_atomic(HERDR_ACTIVE, update_toml_section(text, "theme.custom", body))
+    # herdr exits non-zero when no server is listening, which is the ordinary
+    # case at login. What a later start reads is the file already written.
+    subprocess.run(
+        [command, "server", "reload-config"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def nearest_papirus_folder_color(accent: str) -> str:
     hue, lightness, saturation = colorsys.rgb_to_hls(*_hex_to_rgb01(accent))
     if saturation < 0.12:
@@ -947,6 +1110,7 @@ def install_active_typography_adapters(palette_name: str, typography: dict | Non
     write_atomic(HOME / ".local/share/color-schemes/noctalia.colors", kde_scheme(values))
     write_atomic(HOME / ".config/Trolltech.conf", trolltech_content(typography))
     write_atomic(KITTY_ACTIVE, (generated / "kitty.conf").read_text())
+    update_herdr_theme(values)
     update_wezterm_font_settings(WEZTERM_CONFIG_ACTIVE, typography)
     update_papirus_folder_color(resources["icons"]["theme"], values["accent"])
 

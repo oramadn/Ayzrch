@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Orbit (niri)
+Comment=Orbit desktop on the niri scrollable-tiling compositor
+Exec=/usr/local/bin/orbit-niri-session
+Type=Application
+DesktopNames=niri
+Keywords=tiling;wayland;compositor;
