@@ -1,0 +1,29 @@
+# Seeded, not linked, because Noctalia writes into this file.
+#
+# Noctalia's starship template renders the wallpaper palette and its apply.sh
+# injects it here between markers, adding `palette = "noctalia"` itself. That is
+# an in-place edit of this exact path, so linking it would send a generated
+# palette into the repo on every wallpaper change -- the same reason the GTK
+# settings.ini files and herdr's config.toml are seeded.
+#
+# Colours below are palette names, not hex, so they follow the wallpaper. They
+# resolve once Noctalia has applied its template; before that first run starship
+# falls back to its defaults.
+#
+# The names are semantic on purpose: green and red stay meaningful whichever
+# wallpaper scheme is active, and the directory uses `text` so it stays legible
+# even under m3-content, which pulls every ANSI slot toward the wallpaper's own
+# hue and can leave the chromatic names nearly identical.
+
+add_newline = false
+
+[character]
+success_symbol = "[❯](fg:green)"
+error_symbol   = "[❯](fg:red)"
+
+[git_branch]
+symbol = " "
+style  = "fg:mauve"
+
+[directory]
+style = "bold fg:text"

@@ -10,6 +10,12 @@
 #   qt           -> ~/.config/qt6ct/colors/noctalia.conf
 #   kitty        -> ~/.config/kitty/themes/noctalia.conf
 #   ghostty      -> ~/.config/ghostty/themes/noctalia   (Ayzrch addition: our terminal)
+#   starship     -> injected into ~/.config/starship.toml (Ayzrch addition: our prompt)
+#
+# starship is the one template that edits an existing file rather than writing
+# its own: it injects a [palettes.noctalia] block between markers. That is why
+# dotfiles/seed carries starship.toml and dotfiles/home does not -- a symlink
+# there would put the rendered palette in the repo on every wallpaper change.
 [theme.templates]
 enable_builtin_templates = true
 builtin_ids = [
@@ -22,4 +28,5 @@ builtin_ids = [
   "qt",
   "kitty",
   "ghostty",
+  "starship",
 ]
