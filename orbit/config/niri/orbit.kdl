@@ -127,11 +127,12 @@ layout {
         off
     }
 
-    // Hyprland's master layout gives the main window 70% of the width. The
-    // nearest scrollable equivalent is a 70% default column with the usual
-    // thirds and halves a keystroke away.
+    // Half the screen. Hyprland's master layout gives its main window 70%
+    // (mfact 0.7), but that reads as "too wide" under a scrollable compositor,
+    // where a new window extends the strip rather than competing for one
+    // screenful — and it stops Maximize from being a clean half/full toggle.
     default-column-width {
-        proportion 0.7
+        proportion 0.5
     }
 
     preset-column-widths {
@@ -397,6 +398,7 @@ binds {
     Mod+V hotkey-overlay-title="Windows | Toggle floating" { toggle-window-floating; }
     Alt+Return hotkey-overlay-title="Windows | Fullscreen" { fullscreen-window; }
     Mod+F hotkey-overlay-title="Windows | Maximize" { maximize-column; }
+    Mod+P hotkey-overlay-title="Windows | Maximize" { maximize-column; }
 
     // Directional focus. On Hyprland a script walks windows, then the monitor
     // edge, then the workspace hierarchy; niri's or-monitor and or-workspace
