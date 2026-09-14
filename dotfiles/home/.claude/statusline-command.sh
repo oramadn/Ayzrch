@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Claude Code status line — mirrors Starship config (directory + git branch + model)
+# Claude Code status line — directory + git branch + model, in Orbit's palette.
+#
+# Decorative colours are read from the semantic palette orbit-theme regenerates
+# on every wallpaper change, so this line follows the desktop the way the prompt
+# and the terminal do. The rate-limit and context thresholds deliberately do not:
+# they are a traffic light, and under a wallpaper scheme that tints every slot
+# toward one hue the palette's own success and warning collapse to within a few
+# RGB units of each other. A warning that cannot be seen is worse than one that
+# clashes, so those three stay fixed.
 
 input=$(cat)
 
@@ -45,6 +53,29 @@ print("" if five_hour_pct is None else five_hour_pct)
 print("" if total_cost is None else total_cost)
 print("" if abs_tokens is None else abs_tokens)
 print("" if context_window_size is None else context_window_size)
+
+# Orbit palette, read in this same pass rather than a second interpreter
+# start: this runs on every status line render. Any failure prints blanks and
+# the shell falls back to its built-in colours.
+def _rgb(value):
+    try:
+        text = str(value).lstrip("#")
+        return "%d;%d;%d" % tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except Exception:
+        return ""
+
+palette = {}
+try:
+    import os
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    with open(config_home + "/orbit/generated/noctalia/semantic.json") as handle:
+        palette = json.load(handle).get("semantic") or {}
+except Exception:
+    palette = {}
+
+print(_rgb(palette.get("accent")))
+print(_rgb(palette.get("text_muted")))
+print(_rgb(palette.get("accent_secondary")))
 ')
 
 cwd="${fields[0]}"
@@ -55,6 +86,9 @@ five_hour_pct="${fields[4]}"
 total_cost="${fields[5]}"
 abs_tokens="${fields[6]}"
 context_window_size="${fields[7]}"
+palette_accent="${fields[8]:-}"
+palette_muted="${fields[9]:-}"
+palette_accent_secondary="${fields[10]:-}"
 
 # Shorten home directory to ~
 home="$HOME"
@@ -66,13 +100,19 @@ if [ -n "$cwd" ]; then
   branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 fi
 
-# ANSI colors matching Starship theme (dimmed-friendly)
-BLUE='\033[38;2;173;198;255m'     # #adc6ff — directory color
-GRAY='\033[38;2;191;198;220m'     # #bfc6dc — git branch color
-PURPLE='\033[38;2;208;188;255m'   # #d0bcff — worktree color (distinct from git branch)
+# Decorative colours: Orbit's palette when it is readable, otherwise the values
+# the palette was generated from, so the line still renders on a bare machine.
+fg_or() { # $1 = "r;g;b" from the palette, $2 = fallback escape
+    if [ -n "$1" ]; then printf '\033[38;2;%sm' "$1"; else printf '%b' "$2"; fi
+}
+BLUE=$(fg_or "$palette_accent"            '\033[38;2;173;198;255m')  # directory
+GRAY=$(fg_or "$palette_muted"             '\033[38;2;191;198;220m')  # git branch
+PURPLE=$(fg_or "$palette_accent_secondary" '\033[38;2;208;188;255m') # worktree
+
+# Thresholds: fixed on purpose. See the note at the top of this file.
 GREEN='\033[38;2;166;218;149m'    # rate-limit under 70%
 YELLOW='\033[38;2;245;224;108m'   # rate-limit 70-89%
-RED='\033[38;2;255;180;171m'      # #ffb4ab — rate-limit 90%+ (matches starship error_symbol)
+RED='\033[38;2;255;180;171m'      # rate-limit 90%+
 DIM='\033[2m'
 RESET='\033[0m'
 
