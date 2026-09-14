@@ -2,9 +2,11 @@ import Quickshell
 import Quickshell.Wayland
 import QtQuick
 
-// Keyboard cheatsheet overlay. Every row comes from `hyprctl binds -j`, so the
-// compositor configuration is the only source: a bind that carries a description
-// appears here, one that does not is absent, and neither can drift.
+// Keyboard cheatsheet overlay. Every row comes from `orbit-compositor binds`,
+// which reports Hyprland's binds and niri's hotkey-overlay titles in one shape,
+// so the compositor configuration is the only source under either: a bind that
+// carries a description appears here, one that does not is absent, and neither
+// can drift.
 PanelWindow {
     id: root
 

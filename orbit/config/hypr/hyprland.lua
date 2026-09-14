@@ -602,6 +602,19 @@ hl.window_rule({
     persistent_size = true, -- Remember size across launches.
 })
 
+-- Window rule: Orbit Wallpaper Engine settings.
+-- The placement used to be arguments to the dispatch that launched the window.
+-- It is a rule now so the Hyprland and niri sessions express the same policy —
+-- active monitor, top-right, 20px gap — in their own configuration, and
+-- orbit-wallpaper-launcher only has to start the process.
+hl.window_rule({
+    name = "orbit-wallpaper-settings",
+    match = { title = "^Orbit Wallpaper Engine" },
+    float = true,
+    size = { 560, 760 },
+    move = { "monitor_w-560-20", 45 },
+})
+
 -- Window rule: About This Computer Fastfetch terminal.
 -- The launcher assigns this dedicated class so ordinary WezTerm windows are unaffected.
 hl.window_rule({

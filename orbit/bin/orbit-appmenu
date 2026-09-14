@@ -59,7 +59,7 @@ def xproperties(window):
 def hyprland_clients(address_filter=""):
     try:
         result = subprocess.run(
-            ["hyprctl", "clients", "-j"], check=True, text=True, capture_output=True
+            ["orbit-compositor", "clients"], check=True, text=True, capture_output=True
         )
         clients = json.loads(result.stdout)
         return [

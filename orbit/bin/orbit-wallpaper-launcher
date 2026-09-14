@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
 title='Orbit Wallpaper Engine'
 
 # Reuse the existing settings window instead of creating duplicate UI processes.
-existing_address=$(hyprctl clients -j 2>/dev/null | jq -r --arg title "$title" '
+existing_address=$(orbit-compositor clients 2>/dev/null | jq -r --arg title "$title" '
     ([.[] | select(.title == $title) | .address] | first) // ""')
 if [[ -n "$existing_address" ]]; then
-    exec hyprctl dispatch "hl.dsp.focus({ window = \"address:$existing_address\" })"
+    exec orbit-compositor dispatch focus-window "$existing_address"
 fi
 
-# Keep the accepted Orbit placement policy: active monitor, top-right, 20px gap.
-exec hyprctl dispatch 'hl.dsp.exec_cmd("orbit-wallpaper-settings", { float = true, size = { 560, 760 }, move = { "monitor_w-560-20", 45 } })'
+# The accepted Orbit placement policy — active monitor, top-right, 20px gap — is
+# a window rule in both compositors' configuration rather than an argument to
+# the launch, so the settings window only has to be started.
+exec orbit-launch --shell-command orbit-wallpaper-settings

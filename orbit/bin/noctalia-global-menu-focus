@@ -12,14 +12,14 @@ import sys
 def active_window():
     try:
         result = subprocess.run(
-            ["hyprctl", "activewindow", "-j"],
+            ["orbit-compositor", "activewindow"],
             check=True,
             text=True,
             capture_output=True,
         )
         value = json.loads(result.stdout)
         monitors = subprocess.run(
-            ["hyprctl", "monitors", "-j"],
+            ["orbit-compositor", "monitors"],
             check=False,
             text=True,
             capture_output=True,

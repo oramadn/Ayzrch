@@ -30,7 +30,7 @@ show() {
     # Noctalia restores the layer-shell exclusive zones synchronously, but wait
     # for Hyprland to publish the new reserved geometry before returning.
     for _ in {1..20}; do
-        if hyprctl monitors -j 2>/dev/null | jq -e \
+        if orbit-compositor monitors 2>/dev/null | jq -e \
             'all(.[]; ((.reserved // [0, 0, 0, 0]) | add) > 0)' >/dev/null; then
             return 0
         fi

@@ -120,13 +120,17 @@ def snapshot(window_filter=""):
 
 
 def activate(output, action):
-    candidate = command_json("hyprctl", "activewindow", "-j") or {}
+    candidate = command_json("orbit-compositor", "activewindow") or {}
     if not candidate:
         return 1
     address = str(candidate.get("address") or "")
     if action == "close":
-        focus = f'hl.dsp.focus({{ window = "address:{address}" }})'
-        return subprocess.run(["sh", "-lc", f"hyprctl dispatch '{focus}' && hyprctl dispatch 'hl.dsp.window.close()'"]).returncode
+        # Focus first: the close verb acts on the focused window under both
+        # compositors, and the menu's candidate may not be it.
+        compositor = os.path.expanduser("~/.local/bin/orbit-compositor")
+        if subprocess.run([compositor, "dispatch", "focus-window", address]).returncode:
+            return 1
+        return subprocess.run([compositor, "dispatch", "close-window"]).returncode
     if action == "force-quit":
         return subprocess.run(["kill", "-KILL", str(candidate.get("pid", 0))]).returncode
     if action == "launch":

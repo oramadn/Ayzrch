@@ -32,15 +32,16 @@ ShellRoot {
     property string cheatsheetOutput: ""
     property var cheatsheetGroups: []
 
-    // Modifier bits reported by `hyprctl binds -j`, in the order a chord reads.
+    // Modifier bits reported by `orbit-compositor binds`, in the order a chord
+    // reads. They are Hyprland's numbering under either compositor.
     readonly property var cheatsheetModifiers: [
         { mask: 64, name: "Super" },
         { mask: 4, name: "Ctrl" },
         { mask: 8, name: "Alt" },
         { mask: 1, name: "Shift" }
     ]
-    // Keysyms whose printed form differs from the name Hyprland reports. Both
-    // scroll directions collapse to one label so they merge into a single row.
+    // Keysyms whose printed form differs from the reported name. Both scroll
+    // directions collapse to one label so they merge into a single row.
     readonly property var cheatsheetKeyNames: ({
         "left": "←", "right": "→", "up": "↑", "down": "↓",
         "Return": "Enter", "Escape": "Esc", "TAB": "Tab", "space": "Space",
@@ -66,7 +67,7 @@ ShellRoot {
 
     Process {
         id: cursorProcess
-        command: ["hyprctl", "cursorpos", "-j"]
+        command: ["orbit-compositor", "cursorpos"]
         stdout: StdioCollector {
             onStreamFinished: root.finishCursorOpen(text)
         }
@@ -74,7 +75,7 @@ ShellRoot {
 
     Process {
         id: monitorProcess
-        command: ["hyprctl", "monitors", "-j"]
+        command: ["orbit-compositor", "monitors"]
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
@@ -91,7 +92,7 @@ ShellRoot {
 
     Process {
         id: focusProcess
-        command: ["hyprctl", "activewindow", "-j"]
+        command: ["orbit-compositor", "activewindow"]
         stdout: StdioCollector {
             onStreamFinished: root.checkFocusedApplication(text)
         }
@@ -99,7 +100,7 @@ ShellRoot {
 
     Process {
         id: panelProcess
-        command: ["hyprctl", "layers", "-j"]
+        command: ["orbit-compositor", "layers"]
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
@@ -154,7 +155,7 @@ ShellRoot {
     // monitor that was focused a second ago or show a stale bind.
     Process {
         id: cheatsheetMonitorProcess
-        command: ["hyprctl", "monitors", "-j"]
+        command: ["orbit-compositor", "monitors"]
         stdout: StdioCollector {
             onStreamFinished: root.finishCheatsheetOutput(text)
         }
@@ -162,7 +163,7 @@ ShellRoot {
 
     Process {
         id: cheatsheetBindsProcess
-        command: ["hyprctl", "binds", "-j"]
+        command: ["orbit-compositor", "binds"]
         stdout: StdioCollector {
             onStreamFinished: root.finishCheatsheetOpen(text)
         }

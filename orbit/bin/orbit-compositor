@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""Orbit's single compositor-facing surface.
+
+Orbit's shell integrations were written against `hyprctl -j`. Rather than teach
+each of them a second compositor, this command answers the same questions in the
+same JSON shapes under both Hyprland and niri: a caller asks for monitors and
+receives Hyprland-shaped monitors whichever compositor is running, so the
+QuickShell global menu, the cheatsheet, the application menu and the recorder
+stay compositor-agnostic.
+
+Navigation is deliberately absent. Orbit's directional focus, Home-workspace
+blocks and Alt+Tab overview are Hyprland policy; under niri the compositor's own
+columns, workspaces and overview do that work, so there is nothing to translate.
+
+Shape notes for niri:
+  - window ids are integers, so `address` is the decimal id as a string; every
+    dispatch verb here accepts it with or without an `address:` prefix;
+  - monitor `width`/`height` are logical (post-scale) pixels, which is what the
+    menu anchoring and monitor topology actually want;
+  - niri exposes no pointer position and no layer-shell geometry over IPC, so
+    `cursorpos` reports the focused output's centre and `layers` synthesises the
+    bar rectangle from ORBIT_BAR_HEIGHT (default 48). Both are documented
+    approximations, not readings.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path(os.environ.get("HOME", "~")).expanduser()
+
+# Hyprland's modifier bits, which the cheatsheet overlay decodes directly.
+MOD_SHIFT = 1
+MOD_CTRL = 4
+MOD_ALT = 8
+MOD_SUPER = 64
+
+# niri's layer-shell levels, in Hyprland's numbering.
+LAYER_LEVELS = {"background": "0", "bottom": "1", "top": "2", "overlay": "3"}
+
+# niri spells keysyms in its own style. The cheatsheet already knows Hyprland's
+# spellings, so normalising here keeps the overlay free of compositor knowledge.
+NIRI_KEY_NAMES = {
+    "left": "left",
+    "right": "right",
+    "up": "up",
+    "down": "down",
+    "return": "Return",
+    "enter": "Return",
+    "tab": "TAB",
+    "space": "space",
+    "grave": "grave",
+    "slash": "slash",
+    "escape": "Escape",
+    "comma": "comma",
+    "period": "period",
+    "minus": "minus",
+    "equal": "equal",
+    "bracketleft": "bracketleft",
+    "bracketright": "bracketright",
+    "semicolon": "semicolon",
+    "apostrophe": "apostrophe",
+    "backslash": "backslash",
+    "wheelscrollup": "mouse_up",
+    "wheelscrolldown": "mouse_down",
+    "mouseleft": "mouse:272",
+    "mouseright": "mouse:273",
+    "mousemiddle": "mouse:274",
+}
+
+
+def fail(message: str) -> "NoReturn":  # type: ignore[name-defined]
+    print(f"orbit-compositor: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def detect() -> str:
+    """Return the running compositor, preferring the live session variables."""
+    if os.environ.get("NIRI_SOCKET"):
+        return "niri"
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return "hyprland"
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").casefold()
+    if "niri" in desktop:
+        return "niri"
+    if "hyprland" in desktop:
+        return "hyprland"
+    fail("no supported Wayland compositor in this environment")
+
+
+def run_json(*args: str) -> object:
+    try:
+        result = subprocess.run(args, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        fail(f"{args[0]} is not installed or not in PATH")
+    except subprocess.CalledProcessError as error:
+        fail(error.stderr.strip() or f"{args[0]} failed")
+    try:
+        return json.loads(result.stdout or "null")
+    except json.JSONDecodeError as error:
+        fail(f"could not parse {args[0]} output: {error}")
+
+
+def hypr(*args: str) -> object:
+    return run_json("hyprctl", *args, "-j")
+
+
+def niri(*args: str) -> object:
+    return run_json("niri", "msg", "-j", *args)
+
+
+# ---------------------------------------------------------------------------
+# niri -> Hyprland shape adapters
+# ---------------------------------------------------------------------------
+
+
+def niri_outputs() -> dict:
+    value = niri("outputs")
+    return value if isinstance(value, dict) else {}
+
+
+def niri_focused_output_name() -> str:
+    try:
+        result = subprocess.run(
+            ["niri", "msg", "-j", "focused-output"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        value = json.loads(result.stdout or "null")
+    except (FileNotFoundError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return ""
+    return str(value.get("name", "")) if isinstance(value, dict) else ""
+
+
+def niri_workspaces() -> list:
+    value = niri("workspaces")
+    return value if isinstance(value, list) else []
+
+
+def niri_monitors() -> list[dict]:
+    """Map `niri msg outputs` onto the Hyprland monitor shape.
+
+    Disabled outputs carry no logical rectangle and are dropped, matching
+    Hyprland, which only lists monitors that are actually driving a surface.
+    """
+    outputs = niri_outputs()
+    focused = niri_focused_output_name()
+    workspaces = niri_workspaces()
+
+    ordered = []
+    for name, output in outputs.items():
+        logical = output.get("logical") if isinstance(output, dict) else None
+        if not isinstance(logical, dict):
+            continue
+        ordered.append((str(name), output, logical))
+    # Hyprland's monitor ids follow connection order; left-to-right is the only
+    # ordering Orbit's callers rely on, and it is the one nwg-displays shows.
+    ordered.sort(key=lambda entry: (entry[2].get("x", 0), entry[2].get("y", 0), entry[0]))
+
+    monitors = []
+    for index, (name, output, logical) in enumerate(ordered):
+        active = next(
+            (
+                workspace
+                for workspace in workspaces
+                if str(workspace.get("output", "")) == name and workspace.get("is_active")
+            ),
+            None,
+        )
+        make = str(output.get("make", ""))
+        model = str(output.get("model", ""))
+        serial = str(output.get("serial", "") or "")
+        monitors.append(
+            {
+                "id": index,
+                "name": name,
+                "description": " ".join(part for part in (make, model, serial) if part),
+                "make": make,
+                "model": model,
+                "serial": serial,
+                "x": int(logical.get("x", 0)),
+                "y": int(logical.get("y", 0)),
+                "width": int(logical.get("width", 0)),
+                "height": int(logical.get("height", 0)),
+                "scale": float(logical.get("scale", 1.0)),
+                "transform": logical.get("transform", "Normal"),
+                "focused": name == focused,
+                "activeWorkspace": {
+                    "id": int(active.get("id", 0)) if active else 0,
+                    "name": str(active.get("name") or active.get("idx", "")) if active else "",
+                },
+                "disabled": False,
+            }
+        )
+    return monitors
+
+
+def niri_clients() -> list[dict]:
+    """Map `niri msg windows` onto the Hyprland client shape.
+
+    niri reports a window's position inside its workspace view; Orbit's callers
+    expect desktop coordinates, so the owning output's logical origin is added
+    back on. Older niri builds omit the layout block entirely, in which case the
+    geometry reads as zero rather than failing the whole query.
+    """
+    windows = niri("windows")
+    if not isinstance(windows, list):
+        return []
+    monitors = {monitor["name"]: monitor for monitor in niri_monitors()}
+    workspaces = {
+        int(workspace.get("id", 0)): workspace
+        for workspace in niri_workspaces()
+        if isinstance(workspace, dict)
+    }
+
+    clients = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        workspace = workspaces.get(int(window.get("workspace_id") or 0), {})
+        monitor = monitors.get(str(workspace.get("output", "")), {})
+        layout = window.get("layout") if isinstance(window.get("layout"), dict) else {}
+        position = layout.get("tile_pos_in_workspace_view") or [0, 0]
+        size = layout.get("window_size") or layout.get("tile_size") or [0, 0]
+        clients.append(
+            {
+                "address": str(window.get("id", "")),
+                "mapped": True,
+                "hidden": False,
+                "at": [
+                    int(monitor.get("x", 0)) + int(position[0] or 0),
+                    int(monitor.get("y", 0)) + int(position[1] or 0),
+                ],
+                "size": [int(size[0] or 0), int(size[1] or 0)],
+                "workspace": {
+                    "id": int(workspace.get("id", 0)),
+                    "name": str(workspace.get("name") or workspace.get("idx", "")),
+                },
+                "floating": bool(window.get("is_floating", False)),
+                "monitor": int(monitor.get("id", 0)),
+                "class": str(window.get("app_id", "") or ""),
+                "initialClass": str(window.get("app_id", "") or ""),
+                "title": str(window.get("title", "") or ""),
+                "initialTitle": str(window.get("title", "") or ""),
+                "pid": int(window.get("pid") or 0),
+                "xwayland": False,
+                "fullscreen": 2 if window.get("is_fullscreen") else 0,
+                "focusHistoryID": 0 if window.get("is_focused") else 1,
+            }
+        )
+    return clients
+
+
+def niri_activewindow() -> dict:
+    windows = niri_clients()
+    return next((window for window in windows if window["focusHistoryID"] == 0), {})
+
+
+def niri_activeworkspace() -> dict:
+    focused = niri_focused_output_name()
+    for workspace in niri_workspaces():
+        if workspace.get("is_focused") or (
+            workspace.get("is_active") and str(workspace.get("output", "")) == focused
+        ):
+            monitors = {monitor["name"]: monitor for monitor in niri_monitors()}
+            monitor = monitors.get(str(workspace.get("output", "")), {})
+            return {
+                "id": int(workspace.get("id", 0)),
+                "name": str(workspace.get("name") or workspace.get("idx", "")),
+                "monitor": str(workspace.get("output", "")),
+                "monitorID": int(monitor.get("id", 0)),
+                "windows": 0,
+            }
+    return {}
+
+
+def niri_workspaces_hyprland_shape() -> list[dict]:
+    monitors = {monitor["name"]: monitor for monitor in niri_monitors()}
+    result = []
+    for workspace in niri_workspaces():
+        if not isinstance(workspace, dict):
+            continue
+        monitor = monitors.get(str(workspace.get("output", "")), {})
+        result.append(
+            {
+                "id": int(workspace.get("id", 0)),
+                "name": str(workspace.get("name") or workspace.get("idx", "")),
+                "monitor": str(workspace.get("output", "")),
+                "monitorID": int(monitor.get("id", 0)),
+                "windows": 0,
+            }
+        )
+    return result
+
+
+def niri_layers() -> dict:
+    """Synthesise Hyprland's per-output layer map from `niri msg layers`.
+
+    niri reports which surfaces exist and on which output, but not where they
+    sit. The one consumer that needs geometry is the global menu, which anchors
+    itself below Noctalia's top bar, so a top-anchored bar is reported as a
+    full-width strip of ORBIT_BAR_HEIGHT pixels and everything else as a zero
+    rectangle. This is an approximation; niri has no layer geometry to read.
+    """
+    layers = niri("layers")
+    if not isinstance(layers, list):
+        layers = []
+    bar_height = int(os.environ.get("ORBIT_BAR_HEIGHT", "48"))
+    monitors = {monitor["name"]: monitor for monitor in niri_monitors()}
+
+    result: dict[str, dict] = {
+        name: {"levels": {level: [] for level in LAYER_LEVELS.values()}} for name in monitors
+    }
+    for surface in layers:
+        if not isinstance(surface, dict):
+            continue
+        output = str(surface.get("output", ""))
+        if output not in result:
+            continue
+        monitor = monitors[output]
+        namespace = str(surface.get("namespace", ""))
+        level = LAYER_LEVELS.get(str(surface.get("layer", "top")).casefold(), "2")
+        is_bar = namespace.startswith("noctalia-bar")
+        result[output]["levels"][level].append(
+            {
+                "address": "0x0",
+                "x": int(monitor["x"]) if is_bar else 0,
+                "y": int(monitor["y"]) if is_bar else 0,
+                "w": int(monitor["width"]) if is_bar else 0,
+                "h": bar_height if is_bar else 0,
+                "alpha": 1,
+                "namespace": namespace,
+                "pid": 0,
+            }
+        )
+    return result
+
+
+def niri_cursorpos() -> dict:
+    """niri exposes no pointer position; report the focused output's centre."""
+    monitors = niri_monitors()
+    monitor = next((entry for entry in monitors if entry["focused"]), None)
+    if monitor is None and monitors:
+        monitor = monitors[0]
+    if monitor is None:
+        return {"x": 0, "y": 0}
+    return {
+        "x": int(monitor["x"]) + int(monitor["width"]) // 2,
+        "y": int(monitor["y"]) + int(monitor["height"]) // 2,
+    }
+
+
+# ---------------------------------------------------------------------------
+# niri keybinding source for the cheatsheet
+# ---------------------------------------------------------------------------
+
+BIND_LINE = re.compile(
+    r"""^\s*
+        (?P<chord>[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*)
+        (?P<properties>(?:\s+[a-z-]+=(?:"[^"]*"|\S+))*)
+        \s*\{""",
+    re.VERBOSE,
+)
+OVERLAY_TITLE = re.compile(r'hotkey-overlay-title="((?:[^"\\]|\\.)*)"')
+INCLUDE_LINE = re.compile(r'^\s*include\s+"([^"]+)"')
+
+
+def niri_config_files(entry: Path, seen: set[Path] | None = None) -> list[Path]:
+    """Return the entry config and every file it includes, in include order."""
+    seen = seen if seen is not None else set()
+    entry = entry.resolve()
+    if entry in seen or not entry.is_file():
+        return []
+    seen.add(entry)
+    files = [entry]
+    for line in entry.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = INCLUDE_LINE.match(line)
+        if not match:
+            continue
+        included = Path(match.group(1)).expanduser()
+        if not included.is_absolute():
+            included = entry.parent / included
+        files.extend(niri_config_files(included, seen))
+    return files
+
+
+def niri_binds() -> list[dict]:
+    """Emit `hyprctl binds -j` rows for every documented niri bind.
+
+    niri's own `hotkey-overlay-title` is the description Orbit's cheatsheet
+    reads, so a bind documents itself exactly once and both overlays — niri's
+    built-in one and Orbit's — are fed from the same line of configuration.
+    A bind without a title is deliberately absent from both.
+    """
+    override = os.environ.get("ORBIT_NIRI_CONFIG")
+    if override:
+        config = Path(override).expanduser()
+    else:
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
+        config = config_home / "niri/config.kdl"
+
+    entries: list[dict] = []
+    for path in niri_config_files(config):
+        in_binds = False
+        depth = 0
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not in_binds:
+                if re.match(r"^binds\s*\{", stripped):
+                    in_binds = True
+                    depth = 1
+                continue
+            depth += line.count("{") - line.count("}")
+            if depth <= 0:
+                in_binds = False
+                continue
+            match = BIND_LINE.match(line)
+            if not match:
+                continue
+            title = OVERLAY_TITLE.search(match.group("properties") or "")
+            if not title:
+                continue
+            modmask = 0
+            key = ""
+            for part in match.group("chord").split("+"):
+                folded = part.casefold()
+                if folded in {"super", "mod", "win", "logo"}:
+                    modmask |= MOD_SUPER
+                elif folded == "shift":
+                    modmask |= MOD_SHIFT
+                elif folded in {"ctrl", "control"}:
+                    modmask |= MOD_CTRL
+                elif folded == "alt":
+                    modmask |= MOD_ALT
+                else:
+                    key = NIRI_KEY_NAMES.get(folded, part)
+            if not key:
+                continue
+            entries.append(
+                {
+                    "modmask": modmask,
+                    "key": key,
+                    "description": title.group(1).replace('\\"', '"'),
+                    "dispatcher": "",
+                    "arg": "",
+                }
+            )
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+
+def strip_address(value: str) -> str:
+    return value[len("address:") :] if value.startswith("address:") else value
+
+
+def dispatch(compositor: str, verb: str, argument: str) -> int:
+    if compositor == "hyprland":
+        expressions = {
+            "close-window": 'hl.dsp.window.close()',
+            "toggle-float": 'hl.dsp.window.float({ action = "toggle" })',
+            "focus-window": f'hl.dsp.focus({{ window = "address:{strip_address(argument)}" }})',
+            "focus-monitor": f'hl.dsp.focus({{ monitor = "{argument}" }})',
+            "focus-workspace": f'hl.dsp.focus({{ workspace = "{argument}" }})',
+        }
+        expression = expressions.get(verb)
+        if expression is None:
+            fail(f"unsupported dispatch verb: {verb}")
+        return subprocess.run(
+            ["hyprctl", "dispatch", "--quiet", expression],
+            stdout=subprocess.DEVNULL,
+        ).returncode
+
+    actions = {
+        "close-window": ["close-window"],
+        "toggle-float": ["toggle-window-floating"],
+        "focus-window": ["focus-window", "--id", strip_address(argument)],
+        "focus-monitor": ["focus-monitor", argument],
+        "focus-workspace": ["focus-workspace", argument],
+    }
+    action = actions.get(verb)
+    if action is None:
+        fail(f"unsupported dispatch verb: {verb}")
+    return subprocess.run(
+        ["niri", "msg", "action", *action], stdout=subprocess.DEVNULL
+    ).returncode
+
+
+# ---------------------------------------------------------------------------
+
+
+QUERIES = {
+    "monitors": (lambda: hypr("monitors"), niri_monitors),
+    "clients": (lambda: hypr("clients"), niri_clients),
+    "activewindow": (lambda: hypr("activewindow"), niri_activewindow),
+    "activeworkspace": (lambda: hypr("activeworkspace"), niri_activeworkspace),
+    "workspaces": (lambda: hypr("workspaces"), niri_workspaces_hyprland_shape),
+    "layers": (lambda: hypr("layers"), niri_layers),
+    "cursorpos": (lambda: hypr("cursorpos"), niri_cursorpos),
+    "binds": (lambda: hypr("binds"), niri_binds),
+}
+
+
+def main() -> None:
+    arguments = sys.argv[1:]
+    if not arguments:
+        print(
+            "usage: orbit-compositor {detect|"
+            + "|".join(QUERIES)
+            + "|dispatch VERB [ARGUMENT]}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    command = arguments[0]
+    if command == "detect":
+        print(detect())
+        return
+
+    compositor = detect()
+    if command == "dispatch":
+        if len(arguments) < 2:
+            fail("dispatch requires a verb")
+        raise SystemExit(dispatch(compositor, arguments[1], arguments[2] if len(arguments) > 2 else ""))
+
+    query = QUERIES.get(command)
+    if query is None:
+        fail(f"unknown command: {command}")
+    json.dump(query[0]() if compositor == "hyprland" else query[1](), sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

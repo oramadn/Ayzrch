@@ -21,7 +21,7 @@ SEPARATOR = 50
 def hyprland_clients(address_filter=""):
     try:
         raw = subprocess.run(
-            ["hyprctl", "clients", "-j"],
+            ["orbit-compositor", "clients"],
             check=True,
             text=True,
             capture_output=True,
@@ -35,7 +35,7 @@ def hyprland_clients(address_filter=""):
 def hyprland_monitors():
     try:
         raw = subprocess.run(
-            ["hyprctl", "monitors", "-j"],
+            ["orbit-compositor", "monitors"],
             check=True,
             text=True,
             capture_output=True,
