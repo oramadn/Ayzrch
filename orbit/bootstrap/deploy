@@ -160,9 +160,20 @@ systemctl --user daemon-reload
 # The Alt+Tab, workspace-allocation and shader units are wanted by
 # hyprland-session.target alone; niri-session.target does not pull them, so
 # enabling them here is harmless under either session.
-systemctl --user enable orbit-wallpaper-engine.service workspace-alt-tab-input.service \
+systemctl --user enable workspace-alt-tab-input.service \
     workspace-alt-tab-release.service new-workspace-apps.service \
     window-shader-events.service hypridle.service hyprpolkitagent.service
+# The Wallpaper Engine is an independent project and is not always installed —
+# this tree ships the service, not the renderer. Enabling the unit without its
+# binary gives a crash loop under Restart=on-failure at every login, and every
+# helper that waits on the engine then pays a timeout for a renderer that will
+# never arrive.
+if [[ -x "$home_dir/.local/bin/orbit-wallpaper-engine" ]]; then
+    systemctl --user enable orbit-wallpaper-engine.service
+else
+    systemctl --user disable orbit-wallpaper-engine.service >/dev/null 2>&1 || true
+    printf 'Wallpaper Engine binary is absent; its service is left disabled.\n'
+fi
 
 command -v noctalia >/dev/null 2>&1 || {
     printf 'Noctalia is required before generated appearance outputs can be refreshed.\n' >&2

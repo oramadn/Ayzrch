@@ -11,6 +11,21 @@
 
 set -eu
 
+# The Orbit Wallpaper Engine is optional. Installs that render the wallpaper
+# another way — awww, here — leave its unit failed and never write a status
+# file, so the poll below can never succeed and simply spends three seconds
+# after every unlock before giving up. Both callers, orbit-lock and hypridle's
+# unlock_cmd, paid that on each unlock.
+#
+# SubState, not ActiveState: a unit whose binary is missing crash-loops under
+# Restart=on-failure and reports ActiveState=activating forever, with
+# SubState=auto-restart. That is not an engine about to become ready.
+case "$(systemctl --user show --value --property=SubState \
+    orbit-wallpaper-engine.service 2>/dev/null)" in
+    running|start|start-pre|start-post) ;;
+    *) exit 0 ;;
+esac
+
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/orbit-wallpaper-engine"
 status="$cache/status"
 

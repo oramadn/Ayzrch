@@ -152,6 +152,19 @@ def niri_monitors() -> list[dict]:
     outputs = niri_outputs()
     focused = niri_focused_output_name()
     workspaces = niri_workspaces()
+    # Outputs whose Noctalia bar is currently mapped. orbit-noctalia-session-chrome
+    # waits on `reserved` to confirm the shell has taken its exclusive zone back
+    # after an unlock, and niri publishes no reserved area, so presence of the bar
+    # surface stands in for it. Without this the wait can never succeed and every
+    # unlock pays the full timeout.
+    barred = set()
+    layers = niri("layers")
+    if isinstance(layers, list):
+        for surface in layers:
+            if isinstance(surface, dict) and str(
+                surface.get("namespace", "")
+            ).startswith("noctalia-bar"):
+                barred.add(str(surface.get("output", "")))
 
     ordered = []
     for name, output in outputs.items():
@@ -191,6 +204,10 @@ def niri_monitors() -> list[dict]:
                 "scale": float(logical.get("scale", 1.0)),
                 "transform": logical.get("transform", "Normal"),
                 "focused": name == focused,
+                # [left, top, right, bottom], as Hyprland reports it.
+                "reserved": [0, int(os.environ.get("ORBIT_BAR_HEIGHT", "48")), 0, 0]
+                if name in barred
+                else [0, 0, 0, 0],
                 "activeWorkspace": {
                     "id": int(active.get("id", 0)) if active else 0,
                     "name": str(active.get("name") or active.get("idx", "")) if active else "",
