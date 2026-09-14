@@ -16,7 +16,6 @@ sudo pacman -S --needed --noconfirm \
     unzip \
     zip \
     openssh \
-    chezmoi \
     wtype \
     wl-clipboard \
     ufw \

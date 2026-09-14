@@ -6,8 +6,9 @@
 #     ~/.config/herdr/vehicle_inspection.sh
 # (Optionally add a shell alias, e.g.  alias vi-herdr='~/.config/herdr/vehicle_inspection.sh')
 #
-# Lives under ~/.config/herdr so it syncs via chezmoi. Only this file is tracked by
-# chezmoi — herdr's sockets/logs/session.json are intentionally left unmanaged.
+# Lives under ~/.config/herdr and is carried in the Ayzrch repo's dotfiles tree.
+# Only this file is tracked — herdr's sockets, logs and session.json are runtime
+# state and are deliberately left unmanaged.
 #
 # Mapping from tmuxinator -> herdr:
 #   tmuxinator session  -> herdr workspace

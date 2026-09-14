@@ -47,8 +47,8 @@ gcm() { git commit --message "$*" }
 alias ls="eza --icons"
 alias ll="eza -lah --icons"
 
-# Chezmoi
-alias chc="~/bin/chezmoi-commit.sh"
+# Commit rice + dotfiles (one repo now)
+alias ac="~/bin/ayzrch-commit.sh"
 
 # Nvim
 alias nvimcfg='nvim ~/.config/nvim'
