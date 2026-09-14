@@ -43,7 +43,9 @@ when they do not already exist.
    yours -- prefix key, onboarding flag, keybindings -- except for the single
    `[theme.custom]` table, which `orbit-theme` rewrites from the wallpaper
    palette. Everything outside that table is preserved verbatim. Orbit writes
-   nothing at all if herdr is not installed.
+   nothing at all if herdr is not installed. `dotfiles/seed/` places the file
+   once so the prefix key survives a fresh install without the generated table
+   being linked back into the repository.
 
 Generated files may be regular files even when their templates or generators
 are tracked here. Edit the tracked source or the owning application's template,

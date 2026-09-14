@@ -5,6 +5,32 @@ Arch Linux setup scripts. `./setup.sh` runs every `scripts/*.sh` in order;
 
 - Need to reboot after downloading NVIDIA drivers
 
+## Dotfiles
+
+Everything in `$HOME` comes from this repository. There is no second dotfiles
+repo and no chezmoi; `scripts/05-dotfiles.sh` deploys `dotfiles/` and that is
+the whole story.
+
+Two trees, because two things want to write these files:
+
+- `dotfiles/home/` is **linked** into `$HOME`. Editing the live file edits the
+  repo, so `git status` is the list of changes you have not committed yet.
+- `dotfiles/seed/` is **copied once and never replaced**, for the three files
+  Orbit also writes into: both `gtk-*/settings.ini`, where `orbit-theme` owns
+  four of the six keys, and `herdr/config.toml`, where it owns the generated
+  `[theme.custom]` table. Linking those would push a new palette into this repo
+  every time you changed wallpaper.
+
+`~/.config/nvim` is linked as a whole directory rather than file by file, so
+that when lazy.nvim rewrites `lazy-lock.json` the new pins land in the repo and
+get tracked. A file-level symlink would instead be *replaced* by the first
+program that saves via temp-and-rename -- which is exactly how `nwg-displays`
+defeats a symlink at `~/.config/niri/monitor.kdl`.
+
+What deliberately stays out: generated palette files (they change with every
+wallpaper), machine-local monitor layouts, and third-party plugin trees that
+their own managers install (TPM, lazy.nvim).
+
 ## Orbit desktop
 
 `scripts/15-orbit.sh` installs the Orbit desktop: **Hyprland** compositor,
@@ -59,8 +85,9 @@ any unrelated file.
    which is machine-local and deliberately not tracked here.
 4. Restart Zen Browser to pick up its chrome overrides. Launch LocalSend once,
    then run `~/.local/bin/configure-localsend` to set the device name.
-5. Optional: point ghostty at Noctalia's palette (`theme = noctalia` in your
-   chezmoi-managed `~/.config/ghostty/config`) so the terminal follows the wallpaper.
+5. Optional: point ghostty at Noctalia's palette (`theme = noctalia` in
+   `~/.config/ghostty/config`, which this repo carries) so the terminal follows
+   the wallpaper.
 
 ### Monitors
 
@@ -140,9 +167,9 @@ drops the session straight back to unlocked.
 
 ```sh
 mv ~/.config/hypr.pre-orbit-<date> ~/.config/hypr   # after removing the Orbit symlinks
-chezmoi apply
 ```
 
-Then pick **niri** or the old Hyprland session in Ly. The niri session, wayle bar,
-awww wallpaper daemon and matugen theming are untouched by the Orbit install and
-keep working exactly as before.
+Then pick the old Hyprland session in Ly. Every install step moves what it
+replaces aside as `*.pre-orbit-<date>` rather than deleting it, so rolling back
+is always a `mv` away -- that includes `~/.config/nvim.pre-orbit-<date>`, which
+still holds its original upstream git checkout.

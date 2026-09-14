@@ -1,0 +1,94 @@
+[bar]
+location = "bottom"
+bg = "#000507"
+button-variant = "basic"
+button-rounding = "full"
+
+[[bar.layout]]
+monitor = "*"
+left = ["clock"]
+center = ["hyprland-workspaces"]
+right = ["notifications", "bluetooth", "network", "volume", "battery"]
+
+[modules.clock]
+format = "%a %b %d  %I:%M %p"
+icon-show = false
+label-color = "fg-default"
+button-bg-color = "transparent"
+
+[modules.hyprland-workspaces]
+display-mode = "icon"
+container-bg-color = "transparent"
+active-color = "fg-default"
+occupied-color = "fg-muted"
+empty-color = "fg-subtle"
+active-indicator = "underline"
+icon-size = 1.2
+min-workspace-count = 5
+
+[modules.hyprland-workspaces.workspace-map]
+"1" = { icon = "tbf-diamond-symbolic" }
+"2" = { icon = "tbf-diamond-symbolic" }
+"3" = { icon = "tbf-diamond-symbolic" }
+"4" = { icon = "tbf-diamond-symbolic" }
+"5" = { icon = "tbf-diamond-symbolic" }
+"6" = { icon = "tbf-diamond-symbolic" }
+"7" = { icon = "tbf-diamond-symbolic" }
+
+[modules.notifications]
+popup-position = "top-right"
+popup-hover-pause = true
+popup-duration = 5000
+popup-gap = 8.0
+right-click = "wayle notify dnd"
+icon-show = true
+icon-bg-color = "transparent"
+icon-color = "fg-default"
+label-show = false
+button-bg-color = "transparent"
+
+[modules.bluetooth]
+icon-bg-color = "transparent"
+icon-color = "fg-default"
+label-show = false
+button-bg-color = "transparent"
+
+[modules.network]
+icon-bg-color = "transparent"
+icon-color = "fg-default"
+label-show = false
+button-bg-color = "transparent"
+
+[modules.volume]
+icon-bg-color = "transparent"
+icon-color = "fg-default"
+label-show = true
+label-color = "fg-default"
+button-bg-color = "transparent"
+
+[modules.battery]
+icon-bg-color = "transparent"
+icon-color = "fg-default"
+label-show = true
+label-color = "fg-default"
+button-bg-color = "transparent"
+
+
+[styling]
+theme-provider = "wayle"
+rounding = "sm"
+
+[styling.palette]
+bg       = "#111111"
+surface  = "#1a1a1a"
+elevated = "#242424"
+fg       = "#e8e8e8"
+fg-muted = "#888888"
+primary  = "#a8a8a8"
+red      = "#e06c75"
+yellow   = "#e5c07b"
+green    = "#98c379"
+blue     = "#61afef"
+
+[wallpaper]
+engine-enabled = false

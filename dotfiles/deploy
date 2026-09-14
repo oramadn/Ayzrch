@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Place the personal dotfiles this repo carries.
+#
+# Orbit's bootstrap/deploy owns the rice -- the compositor configs, the shell
+# integrations, the theme adapters. This owns the rest of $HOME: the editor,
+# the shell, the terminal, the multiplexer. The split is by lifecycle, not by
+# importance. Orbit's files are replaced wholesale when the rice is updated;
+# these are yours, and the symlinks mean editing the live file edits the repo,
+# so `git status` here is the list of changes you have not committed yet.
+#
+# This replaced chezmoi. It is deliberately smaller: no templating, no
+# encryption, no per-machine data -- none of which was in use. If per-machine
+# variance is ever needed, that is the feature to add here.
+
+set -euo pipefail
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+home_dir=${HOME:?HOME is required}
+stamp=$(date +%Y-%m-%d)
+
+# Linked whole, rather than file by file, because something other than you
+# writes inside them: lazy.nvim rewrites lazy-lock.json on every plugin update.
+# A directory link puts that write inside the repo, where it is tracked. A file
+# link would be replaced by the first program that saves via temp-and-rename,
+# silently unmanaging the file -- which is exactly how nwg-displays defeats a
+# symlink at ~/.config/niri/monitor.kdl.
+dir_links=(.config/nvim)
+
+moved_aside=()
+
+put_aside() {
+    local destination="$1" backup="$destination.pre-orbit-$stamp"
+    [[ -e "$backup" ]] && backup="$backup-$(date +%H%M%S)"
+    mv "$destination" "$backup"
+    moved_aside+=("$backup")
+}
+
+# Take ownership of a path: link it, adopting whatever is already there.
+# Content that matches the repo is simply replaced by the link; content that
+# differs is moved aside first, never discarded.
+adopt_link() {
+    local source="$1" destination="$2"
+    mkdir -p "$(dirname "$destination")"
+    if [[ -L "$destination" ]]; then
+        [[ "$(readlink -f "$destination")" == "$(readlink -f "$source")" ]] && return
+        put_aside "$destination"
+    elif [[ -e "$destination" ]]; then
+        if [[ -f "$destination" && -f "$source" ]] && cmp -s "$source" "$destination"; then
+            rm -f "$destination"
+        else
+            put_aside "$destination"
+        fi
+    fi
+    ln -s "$source" "$destination"
+}
+
+# Placed once and never replaced, because Orbit writes into them too:
+# orbit-theme owns four of the six keys in each settings.ini, and the
+# [theme.custom] table in herdr's config.toml. Linking them would send those
+# generated writes into this repo on every wallpaper change.
+seed_file() {
+    local source="$1" destination="$2"
+    mkdir -p "$(dirname "$destination")"
+    [[ -e "$destination" ]] || install -m "$(stat -c %a "$source")" "$source" "$destination"
+}
+
+under_dir_link() {
+    local relative="$1" dir
+    for dir in "${dir_links[@]}"; do
+        [[ "$relative" == "$dir/"* ]] && return 0
+    done
+    return 1
+}
+
+linked=0
+while IFS= read -r source; do
+    relative="${source#"$repo_dir/home/"}"
+    under_dir_link "$relative" && continue
+    adopt_link "$source" "$home_dir/$relative"
+    linked=$((linked + 1))
+done < <(find "$repo_dir/home" -type f | sort)
+
+for relative in "${dir_links[@]}"; do
+    adopt_link "$repo_dir/home/$relative" "$home_dir/$relative"
+    linked=$((linked + 1))
+done
+
+seeded=0
+while IFS= read -r source; do
+    relative="${source#"$repo_dir/seed/"}"
+    seed_file "$source" "$home_dir/$relative"
+    seeded=$((seeded + 1))
+done < <(find "$repo_dir/seed" -type f | sort)
+
+printf 'Dotfiles deployed: %d linked, %d seeded.\n' "$linked" "$seeded"
+if ((${#moved_aside[@]})); then
+    printf 'Existing content was moved aside, not deleted:\n'
+    printf '  %s\n' "${moved_aside[@]}"
+fi

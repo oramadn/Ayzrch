@@ -1,0 +1,11 @@
+tags
+test.sh
+.luarc.json
+nvim
+
+spell/
+
+# Upstream kickstart ignores lazy-lock.json because it does not want to ship
+# plugin pins. This is a dotfiles repo, not a starter template: the pins are
+# the point -- they are what makes another machine install the same plugin
+# versions. Tracked deliberately.

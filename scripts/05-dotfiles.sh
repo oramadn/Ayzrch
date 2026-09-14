@@ -1,35 +1,32 @@
 #!/bin/bash
 set -e
 
-echo ":: Dotfiles setup (chezmoi)"
-echo ""
+# Personal dotfiles: editor, shell, terminal, multiplexer.
+#
+# This used to hand off to chezmoi and a second repository. It no longer does.
+# Everything lives in dotfiles/ here, and is symlinked into $HOME, so editing
+# the live file edits the repo -- `git status` is the list of changes you have
+# not committed. One repo, one clone, one source of truth.
+#
+# chezmoi was carrying no templates, no encrypted files and no per-machine
+# data, so nothing was lost in the move. If per-machine variance is wanted
+# later, dotfiles/deploy is where to add it.
+#
+# Safe to run before or after the Orbit scripts: nothing here depends on Orbit,
+# and the three files Orbit also writes into are seeded rather than linked, so
+# neither side clobbers the other.
 
-CHEZMOI_DIR="$HOME/.local/share/chezmoi"
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../dotfiles" && pwd)"
 
-# ── Already initialised ───────────────────────────────────────────────────────
-if [ -d "$CHEZMOI_DIR/.git" ]; then
-    echo "   chezmoi already initialised at $CHEZMOI_DIR"
-    read -rp "   Re-apply existing dotfiles? [Y/n] " APPLY
-    APPLY="${APPLY:-Y}"
-    if [[ "$APPLY" =~ ^[Yy]$ ]]; then
-        chezmoi apply
-        echo ":: Dotfiles applied."
-    else
-        echo ":: Skipped."
-    fi
-    exit 0
-fi
+echo ":: Deploying dotfiles from $DOTFILES_DIR"
+"$DOTFILES_DIR/deploy"
 
-# ── Fresh init ────────────────────────────────────────────────────────────────
-read -rp "   Dotfiles repo URL (leave blank to skip): " REPO_URL
+cat <<'EOF'
 
-if [ -z "$REPO_URL" ]; then
-    echo ":: Skipping dotfiles setup."
-    exit 0
-fi
+:: Dotfiles deployed.
 
-echo ":: Running: chezmoi init --apply $REPO_URL"
-chezmoi init --apply "$REPO_URL"
+   They are symlinks into this repository. Edit them anywhere -- ~/.zshrc,
+   :e in nvim, your tmux config -- and commit from the repo when you are happy.
 
-echo ""
-echo ":: Dotfiles applied successfully!"
+   Anything moved aside is kept next to the original as *.pre-orbit-<date>.
+EOF

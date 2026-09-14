@@ -1,0 +1,73 @@
+bindkey -e
+
+# --- Starship prompt ---
+eval "$(starship init zsh)"
+
+# --- Yazi ---
+function y() {
+	local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+	yazi "$@" --cwd-file="$tmp"
+	IFS= read -r -d '' cwd < "$tmp"
+	[ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
+	rm -f -- "$tmp"
+}
+
+# Case-insensitive completion
+zstyle ':completion:*' matcher-list \
+  'm:{a-z}={A-Z}' \
+  'm:{A-Z}={a-z}'
+
+# Use plugins in ~/.zsh/plugins
+source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# History settings
+HISTFILE="$HOME/.config/zsh/history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt appendhistory
+setopt sharehistory  
+
+# Aliases
+# git
+alias ga='git add'
+alias gap='ga --patch'
+alias gb='git branch'
+alias gc='git commit'
+alias gco='git checkout'
+alias gn='git checkout -b'
+alias gp='git push'
+alias gu='git pull'
+alias gd='git diff --output-indicator-new=" " --output-indicator-old=" "'
+alias gst='git status --short'
+alias gf='git fetch'
+gcm() { git commit --message "$*" }
+
+# Eza
+alias ls="eza --icons"
+alias ll="eza -lah --icons"
+
+# Chezmoi
+alias chc="~/bin/chezmoi-commit.sh"
+
+# Nvim
+alias nvimcfg='nvim ~/.config/nvim'
+
+# context-ledgar
+alias ledger="$HOME/Workspace/connectedmotion/vehicle-inspection/context-ledger/bin/ledger"
+
+# Matugen + awww wallpaper setter (applies to all monitors)
+matugen-wall() { matugen image "$1" && awww img "$1" }
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# Flutter
+export PATH="$PATH:$HOME/development/flutter/bin"
+
+# Android
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export JAVA_HOME="$HOME/development/jdk-17.0.19+10"
+export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin"
