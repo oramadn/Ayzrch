@@ -63,11 +63,19 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
-# Flutter
-export PATH="$PATH:$HOME/development/flutter/bin"
-
-# Android
+# --- SDK locations -------------------------------------------------------
+# Defaults are the desktop's layout. They are plain values, not PATH entries,
+# so a machine that puts its SDKs elsewhere can override them below before the
+# PATH is assembled -- which is the whole reason the PATH export comes last.
+FLUTTER_HOME="$HOME/development/flutter"
 export ANDROID_HOME="$HOME/Android/Sdk"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export JAVA_HOME="$HOME/development/jdk-17.0.19+10"
-export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin"
+
+# Machine-local overrides. Untracked and deliberately so: this is the one file
+# that is allowed to differ between machines, for the things that genuinely do
+# -- SDK paths, a host-specific alias. Everything else is tracked and shared.
+[ -r "${ZDOTDIR:-$HOME/.config/zsh}/zshrc.local" ] && \
+    . "${ZDOTDIR:-$HOME/.config/zsh}/zshrc.local"
+
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export PATH="$PATH:$FLUTTER_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin"
