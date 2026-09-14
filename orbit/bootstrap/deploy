@@ -145,7 +145,8 @@ for source in "$repo_dir/systemd/user"/*.service "$repo_dir/systemd/user"/*.time
     [[ -f "$source" ]] || continue
     link_owned "$source" "$home_dir/.config/systemd/user/$(basename "$source")"
 done
-for directory in hypridle.service.d; do
+for directory in hypridle.service.d hyprpolkitagent.service.d \
+    localsend.service.d awww-daemon.service.d; do
     for source in "$repo_dir/systemd/user/$directory"/*; do
         [[ -f "$source" ]] || continue
         link_owned "$source" "$home_dir/.config/systemd/user/$directory/$(basename "$source")"

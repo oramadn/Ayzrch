@@ -337,10 +337,12 @@ layer-rule {
     }
 }
 
-// The wallpaper daemon must never be treated as a window surface.
+// The wallpaper. place-within-backdrop is deliberately NOT set: it moves a
+// background-layer surface into the overview backdrop instead of drawing it at
+// its normal position, which leaves the workspace showing niri's grey.
 layer-rule {
     match namespace=r#"^awww"#
-    place-within-backdrop true
+    opacity 1.0
 }
 
 // ============================================================

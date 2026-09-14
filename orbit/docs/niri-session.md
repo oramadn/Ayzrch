@@ -122,11 +122,25 @@ either compositor; the diff is worth re-running after a keymap change.
 
 ## Session units
 
-`niri-session.target` is deliberately narrower than `hyprland-session.target`.
-It omits `workspace-alt-tab-input`, `workspace-alt-tab-release` and
-`new-workspace-apps`, all of which exist to give Hyprland behaviour niri has
-natively. `window-shader-events` is Hyprland-only as well: it drives a
-per-window shader through a Hyprland plugin.
+Nine units are bound to `hyprland-session.target` through their own `[Install]`
+sections, and they split into two groups.
+
+Hyprland policy, which `niri-session.target` correctly omits:
+`workspace-alt-tab-input`, `workspace-alt-tab-release` and `new-workspace-apps`
+exist to give Hyprland behaviour niri has natively; `window-shader-events`
+drives a per-window shader through a Hyprland plugin; and
+`orbit-wallpaper-engine` is the Hyprland-specific renderer.
+
+Session services with nothing Hyprland-specific about them, which
+`niri-session.target` must pull and now does: `awww-daemon` (the wallpaper —
+without it the desktop is the compositor's bare grey), `hypridle` (so the
+session locks), `hyprpolkitagent` (so graphical authentication works at all),
+and `localsend`. Each also gets a drop-in adding `PartOf=niri-session.target`,
+so they stop on logout; `PartOf` is additive, so the Hyprland session is
+unaffected.
+
+The lesson is worth recording: a new session target has to be derived from the
+full list of units the old one pulled, not from the ones that come to mind.
 
 ## Portals
 
