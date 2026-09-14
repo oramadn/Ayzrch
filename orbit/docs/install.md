@@ -4,6 +4,10 @@ This is the canonical Orbit v0.1 installation path. It assumes a Fedora 44
 Wayland system with Hyprland installed or ready to install. Commands below are
 run from the Orbit checkout unless stated otherwise.
 
+It installs the Hyprland session, which is the reference. The niri session is
+additive and is installed on top of a working Orbit; see
+[`niri-session.md`](niri-session.md) for what it needs and what it changes.
+
 ## 1. Install Dependencies
 
 Install the required Fedora packages from [`dependencies.md`](dependencies.md).

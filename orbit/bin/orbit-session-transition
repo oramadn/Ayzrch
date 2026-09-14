@@ -14,7 +14,18 @@ session_sound="$HOME/.local/bin/play-session-sound"
 wallpaper_status="$HOME/.cache/orbit-wallpaper-engine/status"
 wallpaper_control="$HOME/.cache/orbit-wallpaper-engine/control"
 wallpaper_events="$HOME/.cache/orbit-wallpaper-engine/events"
-session_target=hyprland-session.target
+# Workspace staging is Hyprland's visual transition surface: windows are parked
+# on a private workspace so the compositor animates the scene away. niri has no
+# equivalent that can be driven from outside, so under niri the transition keeps
+# its sound, chrome and wallpaper phases and the staging phases are absent
+# rather than failing.
+if [ -n "${NIRI_SOCKET:-}" ]; then
+    compositor=niri
+    session_target=niri-session.target
+else
+    compositor=hyprland
+    session_target=hyprland-session.target
+fi
 hyprlock_bin="${ORBIT_HYPRLOCK_BIN:-hyprlock}"
 wallpaper_reader_pid=""
 wallpaper_event_file=""
@@ -129,6 +140,7 @@ wallpaper_transition() {
 }
 
 stage_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "workspace-exit-dispatch-ms=$(now_ms)"
     "$staging" exit >/dev/null 2>&1 && {
         log "workspace-exit-complete-ms=$(now_ms)"
@@ -140,6 +152,7 @@ stage_workspaces() {
 }
 
 restore_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "workspace-enter-dispatch-ms=$(now_ms)"
     "$staging" reset >/dev/null 2>&1 || {
         log 'workspace restoration failed'
@@ -150,6 +163,7 @@ restore_workspaces() {
 }
 
 stage_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "session-workspace-lock-dispatch-ms=$(now_ms)"
     "$session_workspaces" lock-start >/dev/null && {
         log "session-workspace-lock-complete-ms=$(now_ms)"
@@ -161,6 +175,7 @@ stage_lock_workspaces() {
 }
 
 wait_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     "$session_workspaces" lock-wait >/dev/null 2>&1 || {
         log 'session workspace lock wait failed'
         return 1
@@ -168,6 +183,7 @@ wait_lock_workspaces() {
 }
 
 restore_lock_workspaces() {
+    [ "$compositor" = hyprland ] || return 0
     log "session-workspace-unlock-dispatch-ms=$(now_ms)"
     "$session_workspaces" unlock >/dev/null 2>&1 || {
         log 'session workspace restoration failed'

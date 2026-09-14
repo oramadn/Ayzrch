@@ -1,0 +1,18 @@
+// Machine-local niri configuration. Seeded once, then yours.
+//
+// bootstrap/deploy never replaces this file, and it is deliberately not tracked
+// per-machine in the repository.
+//
+// Monitors do NOT belong here. Run nwg-displays, exactly as you would under the
+// Hyprland session: it writes ~/.config/niri/monitor.kdl and asks niri to
+// reload, so the layout applies live with the usual revert-on-timeout prompt.
+//
+// What does belong here is everything else that is only true of this machine:
+//
+//   workspace "1" { open-on-output "DP-2"; }
+//   binds {
+//       Mod+F1 { spawn-sh "~/bin/something-local"; }
+//   }
+//
+// The scratchpad Super+grave reaches has to exist as a named workspace.
+workspace "scratch"

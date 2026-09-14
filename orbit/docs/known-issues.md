@@ -15,3 +15,14 @@ These are current, non-blocking v0.1 limitations rather than resolved defects.
   standard deployment and requires privileged initramfs installation.
 - Optional application integrations are only active when their applications
   and machine-specific configuration are present.
+- The niri session has no equivalent for the four Hyprland plugins. Hyprglass
+  refraction and chromatic aberration, HyprWindowShade ripples, dynamic-cursors
+  tilt and ScrollOverview are absent; niri's native blur, shadow, rounding and
+  overview are configured to cover what they can.
+- Under niri, `orbit-compositor cursorpos` reports the focused output's centre
+  and `layers` synthesises the Noctalia bar rectangle from `ORBIT_BAR_HEIGHT`.
+  niri exposes neither the pointer position nor layer-shell geometry over IPC,
+  so the global menu anchors less precisely there than under Hyprland.
+- Disabling Noctalia's niri template deletes `~/.config/niri/noctalia.kdl`,
+  which `config.kdl` includes. `orbit-niri-session` re-seeds it at start, so the
+  breakage is limited to a live reload before the next login.

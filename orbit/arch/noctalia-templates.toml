@@ -3,6 +3,7 @@
 # Orbit's adapters read Noctalia's rendered template output, so these built-in
 # templates are required rather than cosmetic:
 #   hyprland     -> ~/.config/hypr/noctalia.lua        (orbit-theme, window borders)
+#   niri         -> ~/.config/niri/noctalia.kdl        (niri session window borders)
 #   wezterm      -> ~/.config/wezterm/colors/Noctalia.toml (orbit-theme ANSI palette source)
 #   kcolorscheme -> ~/.local/share/color-schemes/noctalia.colors (hyprqt6engine.conf)
 #   gtk3 / gtk4  -> ~/.config/gtk-{3.0,4.0}/noctalia.css (imported by Orbit's gtk.css)
@@ -13,6 +14,7 @@
 enable_builtin_templates = true
 builtin_ids = [
   "hyprland",
+  "niri",
   "wezterm",
   "kcolorscheme",
   "gtk3",

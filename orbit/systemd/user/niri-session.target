@@ -1,0 +1,12 @@
+[Unit]
+Description=niri graphical session
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+Wants=syncthing.service
+After=graphical-session-pre.target
+Before=graphical-session.target
+
+# Deliberately narrower than hyprland-session.target. The units it omits —
+# workspace-alt-tab-input, workspace-alt-tab-release and new-workspace-apps —
+# exist to give Hyprland the overview and workspace allocation that niri
+# performs natively, so under niri there is nothing for them to do.

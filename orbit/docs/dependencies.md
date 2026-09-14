@@ -26,6 +26,10 @@ including `systemctl`, `hyprctl`, `flock`, `sg`, `ps`, `wl-copy`, and
 ## Required External Projects
 
 - Hyprland and Noctalia, which remain the compositor and shell/palette owners;
+- for the niri session: `niri`, `xwayland-satellite` (niri has no built-in
+  Xwayland, and Orbit carries rules for X11 clients), and
+  `xdg-desktop-portal-gnome`, the only backend implementing ScreenCast for
+  niri. None of the four Hyprland plugins apply there;
 - QuickShell, which hosts Orbit's global-menu configuration;
 - the four Hyprland plugins listed in [`external-components.md`](external-components.md);
 - the independent Orbit Wallpaper Engine project. v0.1 includes an x86-64

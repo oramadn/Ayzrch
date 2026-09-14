@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Orbit's niri session launcher, invoked by the display manager.
+#
+# niri's KDL cannot read $HOME, branch on the host's GPU, or tolerate an include
+# whose target is missing, so the three things Hyprland does inside hyprland.lua
+# happen here instead: the session PATH is set before anything is spawned, the
+# NVIDIA variables are applied only on NVIDIA hosts, and every include named by
+# config.kdl is guaranteed to exist before niri parses it.
+
+set -euo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/niri"
+entry="$config_dir/config.kdl"
+
+prepend_path_entry() {
+    case ":$PATH:" in
+        *":$1:"*) ;;
+        *) PATH="$1:$PATH" ;;
+    esac
+}
+
+prepend_path_entry "$HOME/bin"
+prepend_path_entry "$HOME/.local/bin"
+export PATH
+
+# NVIDIA proprietary/open driver environment. Applied only on NVIDIA hosts so
+# the same session stays correct on machines without one, matching the runtime
+# check Orbit's Hyprland configuration performs.
+if [[ -r /proc/driver/nvidia/version ]]; then
+    export NVD_BACKEND=direct
+    export LIBVA_DRIVER_NAME=nvidia
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+fi
+
+export XDG_CURRENT_DESKTOP=niri
+export XDG_SESSION_DESKTOP=niri
+export XDG_SESSION_TYPE=wayland
+
+# A missing include is a fatal parse error, and both Noctalia's palette output
+# and the machine-local file can legitimately be absent — before Noctalia has
+# ever rendered its templates, or after its template is switched off, which
+# deletes noctalia.kdl outright. An empty file parses and costs nothing.
+if [[ -f "$entry" ]]; then
+    while read -r include; do
+        [[ -n "$include" ]] || continue
+        case "$include" in
+            /*) target="$include" ;;
+            *) target="$config_dir/$include" ;;
+        esac
+        [[ -e "$target" ]] && continue
+        mkdir -p "$(dirname "$target")"
+        printf '// Seeded by orbit-niri-session: the include exists, so niri parses.\n' >"$target"
+    done < <(sed -n 's/^[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$entry")
+fi
+
+exec niri --session "$@"

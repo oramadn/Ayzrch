@@ -30,6 +30,7 @@ check_file() {
 if [[ "$source_only" == false ]]; then
     for relative in hypr/hyprland.lua hypr/hypridle.conf hypr/hyprlock.conf \
         hypr/hyprtoolkit.conf hypr/appearance.toml \
+        niri/orbit.kdl niri/orbit-overrides.kdl \
         noctalia/90-orbit-glass.toml noctalia/hooks.toml \
         quickshell/global-menu/shell.qml kitty/kitty.conf; do
         check_link "$repo_dir/config/$relative" "$home_dir/.config/$relative"
@@ -55,6 +56,16 @@ root = pathlib.Path(sys.argv[1])
 for path in root.rglob("*.py"):
     compile(path.read_text(), str(path), "exec")
 PY
+
+# The niri session configuration is checked by niri itself, which is the only
+# thing that can say whether a KDL document is a valid niri config.
+if command -v niri >/dev/null 2>&1; then
+    niri validate -c "$repo_dir/config/niri/orbit.kdl" >/dev/null 2>&1 || {
+        printf 'niri rejected config/niri/orbit.kdl\n' >&2
+        niri validate -c "$repo_dir/config/niri/orbit.kdl" >&2
+        exit 1
+    }
+fi
 
 for script in "$repo_dir/bin"/* "$repo_dir/bootstrap"/* "$repo_dir/config/hypr/scripts"/*; do
     [[ -f "$script" ]] || continue
