@@ -19,12 +19,12 @@ for provenance and every local modification.
 scripts/15-orbit.sh                # packages, deploy, plugins
 scripts/16-orbit-integrations.sh   # Zen theming, LocalSend, GPU Screen Recorder
 scripts/17-awww-wallpaper.sh       # awww renders the wallpaper Noctalia picks
-scripts/13-niri.sh                 # the same desktop on niri, as a second session
+scripts/18-niri.sh                 # the same desktop on niri, as a second session
 ```
 
 ### Two compositors
 
-`scripts/13-niri.sh` adds an **Orbit (niri)** session alongside Hyprland. Both
+`scripts/18-niri.sh` adds an **Orbit (niri)** session alongside Hyprland. Both
 are installed; you pick one in Ly at login. The shell, the palette, every theme
 adapter, the global menu and the cheatsheet are shared unchanged — what changes
 is window management, which niri does natively instead of through Orbit's
@@ -51,7 +51,7 @@ any unrelated file.
 ### After installing
 
 1. Log out, then pick **Hyprland** in Ly — not `hyprland-uwsm`. If you also ran
-   `scripts/13-niri.sh`, **Orbit (niri)** is the other entry.
+   `scripts/18-niri.sh`, **Orbit (niri)** is the other entry.
 2. Noctalia's setup wizard runs on first login. Pick a wallpaper (the picker
    browses `~/Pictures`); the whole palette (window borders, GTK, Qt,
    terminals, lock screen) is derived from it, and awww draws it.

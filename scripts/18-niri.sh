@@ -3,11 +3,15 @@ set -e
 
 # Orbit on niri: the same desktop, driven by a scrollable-tiling compositor.
 #
-# Run this after scripts/15-orbit.sh. Orbit installs the shell, the palette, the
-# theme adapters and the QuickShell global menu; all of that is compositor-
-# independent and is reused unchanged. This script adds what niri needs on top —
-# the compositor, its Xwayland and portal backends, the session entry Ly offers
-# at login — and deploys Orbit's niri configuration.
+# It is numbered 18 so setup.sh reaches it after 15-orbit.sh: the scripts run in
+# numeric order, this one needs Orbit already deployed, and it exits non-zero if
+# it is not -- which under setup.sh's `set -e` would abort the whole install.
+#
+# Orbit installs the shell, the palette, the theme adapters and the QuickShell
+# global menu; all of that is compositor-independent and is reused unchanged.
+# This script adds what niri needs on top -- the compositor, its Xwayland and
+# portal backends, the session entry Ly offers at login -- and deploys Orbit's
+# niri configuration.
 #
 # Nothing here touches the Hyprland session. Both remain installed and the
 # compositor is chosen at the login screen.
