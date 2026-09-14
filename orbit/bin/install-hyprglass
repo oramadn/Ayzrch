@@ -21,7 +21,16 @@ for package in hyprland pixman-1 libdrm; do
 done
 
 if command -v hyprctl >/dev/null && command -v python3 >/dev/null; then
-    running_commit=$(hyprctl version -j 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))' || true)
+    # hyprctl writes nothing to stdout when no compositor is running, and the
+    # niri session is exactly that case. Feeding the empty string to json.load
+    # raised a traceback that made a healthy install look broken, so the version
+    # is only parsed once there is something to parse.
+    hyprctl_version=$(hyprctl version -j 2>/dev/null || true)
+    running_commit=""
+    if [[ -n "$hyprctl_version" ]]; then
+        running_commit=$(printf '%s' "$hyprctl_version" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))' 2>/dev/null || true)
+    fi
     if [[ -n "$running_commit" && "$running_commit" != "$reference_hyprland" ]]; then
         printf 'warning: building Hyprglass for Hyprland ABI %s, not validated reference %s\n' "$running_commit" "$reference_hyprland" >&2
     fi

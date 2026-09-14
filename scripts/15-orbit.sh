@@ -60,6 +60,7 @@ sudo pacman -S --needed --noconfirm \
     playerctl \
     brightnessctl \
     dolphin \
+    papirus-icon-theme \
     wayland \
     libpng \
     mesa \
@@ -110,12 +111,22 @@ fi
 # ------------------------------------------------------------------------------
 "$ORBIT_DIR/arch/install-oblique-cursor"
 
+# papirus-folders recolors Papirus's folder icons to the live accent. orbit-theme
+# skips that step when the tool is absent, so without this the folders stayed the
+# stock blue no matter what the wallpaper did.
+"$ORBIT_DIR/arch/install-papirus-folders"
+
 # ------------------------------------------------------------------------------
 # 5. Back up any pre-Orbit config. Orbit's deploy refuses to overwrite existing
 #    files, so these directories must be out of the way first.
 # ------------------------------------------------------------------------------
 STAMP="$(date +%Y-%m-%d)"
-for dir in hypr kitty wezterm; do
+# niri is in this list even though scripts/18-niri.sh installs the niri session:
+# bootstrap/deploy lays down the niri configuration too, so migrate --dry-run
+# below inspects ~/.config/niri whether or not 18 is ever run. Leaving niri out
+# meant a machine with a hand-written config.kdl aborted here, at a step that
+# never explains which script owns the file in the way.
+for dir in hypr kitty wezterm niri; do
     target="$HOME/.config/$dir"
     # Only a real directory of someone else's files is in the way; an existing
     # Orbit deployment is a directory of symlinks into this repo and is fine.
@@ -142,6 +153,18 @@ install -m 0644 "$ORBIT_DIR/arch/noctalia-templates.toml" \
 if [ ! -e "$HOME/.config/hypr/monitors.lua" ]; then
     install -D -m 0644 "$ORBIT_DIR/arch/monitors.lua.default" "$HOME/.config/hypr/monitors.lua"
     echo ":: Seeded a fallback ~/.config/hypr/monitors.lua (replace it with nwg-displays)."
+fi
+
+# Seed the semantic palette for the same reason, but a subtler one: the shell's
+# ThemeAdapter watches this path, and a QML FileView cannot watch a file that
+# does not exist yet. On a first login the global menu started before Noctalia
+# had ever rendered a palette, missed its creation, and drew the cheatsheet in
+# fallback colours for the whole session. A file that exists from the start is
+# loaded, watched, and replaced in place by orbit-theme's first real run.
+if [ ! -e "$HOME/.config/orbit/generated/noctalia/semantic.json" ]; then
+    install -D -m 0644 "$ORBIT_DIR/arch/semantic.json.default" \
+        "$HOME/.config/orbit/generated/noctalia/semantic.json"
+    echo ":: Seeded a fallback semantic palette (orbit-theme replaces it)."
 fi
 
 # ------------------------------------------------------------------------------

@@ -8,6 +8,11 @@ BACKGROUND_FILE="${HOME:?}/.cache/orbit-wallpaper-engine/hyprlock-background.con
 LIVE_SYNC="/var/lib/noctalia-greeter/sync.toml"
 APPLY="/usr/bin/noctalia-greeter-apply-appearance"
 
+# Orbit's wallpaper engine is optional and deliberately not installed when awww
+# renders the wallpaper, so this file legitimately never appears. Without the
+# guard sed reported a missing file on every colour update.
+[ -r "$BACKGROUND_FILE" ] || exit 0
+
 color=$(
     sed -n 's/^[[:space:]]*color[[:space:]]*=[[:space:]]*rgb(\([0-9A-Fa-f]\{6\}\))[[:space:]]*$/\1/p' "$BACKGROUND_FILE" \
         | sed -n '1p'

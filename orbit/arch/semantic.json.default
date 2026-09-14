@@ -1,0 +1,14 @@
+{
+  "palette": {
+    "name": "Orbit fallback"
+  },
+  "semantic": {
+    "surface": "#1a1b26",
+    "surface_elevated": "#24283b",
+    "surface_selected": "#2f334d",
+    "text": "#c0caf5",
+    "text_muted": "#9aa5ce",
+    "accent": "#7aa2f7",
+    "border": "#3b4261"
+  }
+}
