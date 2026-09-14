@@ -68,7 +68,10 @@ input {
     touchpad {
         tap
         accel-speed 0.0
-        // Orbit sets natural_scroll = false on Hyprland; niri's default is off.
+        // Content follows the fingers, matching the Hyprland session's
+        // natural_scroll = true. niri's default is off, so this must be
+        // stated explicitly rather than omitted.
+        natural-scroll
     }
 
     // Hyprland's follow_mouse = 2 focuses on motion without warping the pointer.

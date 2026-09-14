@@ -42,6 +42,14 @@ fi
 systemctl --user restart orbit-wallpaper-engine.service >/dev/null 2>&1 || true
 
 # Then hold until it is released; the transition plays its unlock sequence next.
+#
+# Polled tightly on purpose. The unlock sequence opens with a niri screen
+# transition, which freezes whatever is on screen and cross-fades from it. That
+# only reads as a fade out of the lock screen if it is issued while the lock
+# surface is still up. At a half-second poll the desktop was already revealed
+# before this loop noticed, so the transition froze the desktop and cross-faded
+# it to itself -- the lock faded in and nothing faded out. The wait is idle
+# either way; the cost of checking more often is negligible.
 while locked_hint; do
-    sleep 0.5
+    sleep 0.05
 done

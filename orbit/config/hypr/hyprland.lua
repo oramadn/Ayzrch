@@ -199,7 +199,7 @@ hl.config({
         follow_mouse = orbitFollowMouse,       -- Follow mouse mode (0=off, 1=speed-1, 2=speed-2 from Orbit).
         mouse_refocus = false,                 -- Do not refocus windows when moving the mouse.
         sensitivity = 0,                       -- Mouse sensitivity (0 = use system default).
-        touchpad = { natural_scroll = false }, -- Touchpad scroll direction (false = traditional).
+        touchpad = { natural_scroll = true },  -- Touchpad scroll direction (true = content follows fingers).
     },
 
     cursor = {
