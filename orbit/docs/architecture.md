@@ -14,8 +14,8 @@ or QML file knows which is running.
 
 Noctalia owns the shell and palette. Its generated files are consumed directly
 by GTK, Qt/KDE, WezTerm, and Hyprland. `orbit-theme` generates only adapters
-that have an active consumer, including GTK presentation/opacity, Kitty, and
-Hyprlock.
+that have an active consumer, including GTK presentation/opacity, Kitty,
+herdr, and Hyprlock.
 
 Hyprland starts Noctalia, the global-menu QuickShell configuration, and
 `orbit-session-bootstrap`. The global-menu configuration also hosts the keyboard

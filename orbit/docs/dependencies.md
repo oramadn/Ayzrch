@@ -52,8 +52,8 @@ Hyprland commit differs from the validated reference.
 
 - Sunshine/Moonlight and GPU Screen Recorder for streaming;
 - Steam and GameMode for game sessions;
-- Obsidian, Zen Browser, Zed, WezTerm, Kitty, and Nautilus presentation or
-  application integrations;
+- Obsidian, Zen Browser, Zed, WezTerm, Kitty, herdr, and Nautilus presentation
+  or application integrations;
 - Nautilus Actions dependencies and its pinned upstream extension;
 - LocalSend;
 - Plymouth script-theme packages and privileged initramfs installation.

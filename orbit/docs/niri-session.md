@@ -12,7 +12,8 @@ byte for byte:
 - Noctalia — the bar, launcher, notifications, OSD, lock screen and the source
   of every colour in the session. Noctalia has a native niri backend, so it
   behaves identically;
-- the palette adapters: GTK 3/4, Qt/KDE, Kitty, WezTerm, Ghostty, Zed, Zen;
+- the palette adapters: GTK 3/4, Qt/KDE, Kitty, WezTerm, Ghostty, Zed, Zen,
+  herdr;
 - the QuickShell global menu, its application-actions popup, and the keyboard
   cheatsheet;
 - `orbit-theme`, `orbit-update-all-colors`, the sound theme, hypridle, and the

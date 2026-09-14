@@ -39,6 +39,11 @@ when they do not already exist.
    file, because nwg-displays replaces a read-only symlink at that path.
  - `~/.config/niri/local.kdl` holds this machine's workspaces and personal
    binds. It is seeded once and never replaced.
+ - `~/.config/herdr/config.toml` is the one file Orbit only partly owns. It is
+   yours -- prefix key, onboarding flag, keybindings -- except for the single
+   `[theme.custom]` table, which `orbit-theme` rewrites from the wallpaper
+   palette. Everything outside that table is preserved verbatim. Orbit writes
+   nothing at all if herdr is not installed.
 
 Generated files may be regular files even when their templates or generators
 are tracked here. Edit the tracked source or the owning application's template,

@@ -30,7 +30,7 @@ dependency updates.
 ## Features
 
 - Noctalia-driven colors with Orbit adapters for GTK, Qt/KDE, Kitty, WezTerm,
-  Hyprland, niri, and Hyprlock;
+  herdr, Hyprland, niri, and Hyprlock;
 - Hyprland workspace policy, application placement, Alt+Tab, transitions, and
   lock/session services;
 - a niri session that reuses all of the above and delegates navigation to the
