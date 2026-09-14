@@ -105,11 +105,26 @@ for relative in "$repo_dir"/config/quickshell/global-menu/*; do
 done
 for relative in gtk-3.0/gtk.css \
     gtk-3.0/gtk3-presentation.css gtk-3.0/shadow-overrides.css \
-    gtk-4.0/gtk.css gtk-4.0/gtk-dark.css \
+    gtk-4.0/gtk.css \
+    gtk-4.0/gtk4-presentation.css \
     gtk-4.0/shadow-overrides.css kitty/kitty.conf \
     wezterm/orbit-about.lua zed/settings.json zed/themes/noctalia.json \
     zen/orbit-userChrome.css; do
     link_config "$relative"
+done
+
+# orbit.css and orbit-shape.css are orbit-theme's generated GTK outputs, and
+# gtk.css imports both. They do not exist until orbit-theme has run, and a
+# missing @import is a parser error on every GTK application start, so an empty
+# placeholder is created for each when absent. orbit-theme overwrites them.
+for gtk_version in 3.0 4.0; do
+    for generated in orbit.css orbit-shape.css; do
+        target="$home_dir/.config/gtk-$gtk_version/$generated"
+        mkdir -p "$(dirname "$target")"
+        [[ -e "$target" ]] ||
+            printf '/* Replaced by orbit-theme when it next generates GTK output. */\n' \
+                >"$target"
+    done
 done
 
 seed_file "$repo_dir/config/wezterm/wezterm.lua" "$home_dir/.config/wezterm/wezterm.lua"

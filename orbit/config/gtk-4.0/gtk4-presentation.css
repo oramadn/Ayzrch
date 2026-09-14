@@ -1,0 +1,23 @@
+/* Static GTK4 presentation choices. Palette values come from noctalia.css.
+ *
+ * The GTK4 counterpart of gtk-3.0/gtk3-presentation.css, with the same radii.
+ * The selectors differ because GTK4 renames several widget nodes: a spinbutton
+ * is a single node rather than a wrapper around an entry, and a combo box is a
+ * dropdown whose child is a button.
+ *
+ * Popover rounding is deliberately absent. shadow-overrides.css is imported
+ * after this file and sets the radius on `popover > contents`, which is where
+ * libadwaita actually paints the popup surface, so a rule here would be
+ * overridden and never take effect. */
+
+button:not(.flat):not(.circular),
+entry,
+spinbutton,
+dropdown > button,
+combobox > button {
+    border-radius: 8px;
+}
+
+.card {
+    border-radius: 10px;
+}
