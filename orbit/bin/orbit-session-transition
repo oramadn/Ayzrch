@@ -278,7 +278,20 @@ run_login() {
 
 run_unlock() {
     local wallpaper_ok=0
-    screen_transition
+    # No screen transition here, and not for want of trying to place one.
+    #
+    # Noctalia's lock is an ext-session-lock-v1 client, so the compositor owns
+    # the locked state and unlock_and_destroy reveals the desktop atomically.
+    # There is no instant at which an external client can freeze the locked
+    # frame: issued from Noctalia's own session_unlocked hook, which fires in
+    # the same millisecond as the unlock request and before logind's hint is
+    # cleared, niri's screen transition still produced nothing. Noctalia does
+    # not animate its lock surface away either; unlock_and_destroy is called
+    # directly. So the unlock is abrupt, and that is a property of the lock
+    # protocol rather than a timing that can be tuned.
+    #
+    # Locking is unaffected: there the transition is issued while still
+    # unlocked, which is why it has an ordinary frame to freeze.
     "$session_sound" desktop-unlock >/dev/null 2>&1 &
     wallpaper_transition_start intro 8 && wallpaper_ok=1 || \
         log 'Wallpaper intro unavailable during unlock'
