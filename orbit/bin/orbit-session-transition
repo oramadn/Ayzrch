@@ -95,10 +95,25 @@ chrome() {
     "$session_chrome" "$@"
 }
 
+# The delay is how long niri holds the frozen frame before it starts the
+# cross-fade, so it has to outlast whatever is being waited for, and the two
+# directions are waiting for different things.
+#
+# Locking waits on Noctalia's lock surface, which is a QuickShell window and
+# takes roughly 600-670ms from "session lock requested" to "session is locked".
+# The old 150ms was a hyprlock-era value: the freeze expired half a second
+# before the lock existed, the cross-fade ran desktop-to-desktop and was
+# therefore invisible, and the lock then appeared abruptly. Overshooting only
+# holds the frozen frame a little longer, so this is set above the measured
+# worst case rather than at it.
+#
+# Unlocking is the opposite: the lock surface is already on screen and is torn
+# down within a few tens of milliseconds, so a long freeze would just hold a
+# still desktop for no reason. Short is right there.
 screen_transition() {
     [ "$compositor" = niri ] || return 0
     niri msg action do-screen-transition \
-        --delay-ms "${ORBIT_SCREEN_TRANSITION_MS:-150}" >/dev/null 2>&1 || true
+        --delay-ms "${1:-${ORBIT_SCREEN_TRANSITION_MS:-150}}" >/dev/null 2>&1 || true
 }
 
 wallpaper_engine_starting_or_running() {
@@ -295,7 +310,7 @@ run_lock() {
         log 'Wallpaper exit unavailable; lock continues'
     [ "$wallpaper_ok" -eq 1 ] && wallpaper_transition_wait || true
 
-    screen_transition
+    screen_transition "${ORBIT_SCREEN_TRANSITION_LOCK_MS:-800}"
     for attempt in 1 2; do
         "$hyprlock_bin"
         hyprlock_status=$?
