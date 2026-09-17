@@ -90,8 +90,22 @@ wait_noctalia_ready() {
 # and the bar and dock are Top, so the lock already covers them: hiding them buys
 # nothing and costs a visible Noctalia fade-out that competes with the screen
 # transition instead of being hidden behind it.
+#
+# Only the hide direction is gated, though. Noctalia's dock-hide persists an
+# override into settings.toml -- `noctalia msg --help` marks dock-hide/dock-show
+# "(persists override)", and unlike desktop-widgets-hide there is no runtime-only
+# form -- so a hide that is never followed by its show outlives the session that
+# wrote it. A Hyprland logout is exactly that: it hides the chrome and is then
+# torn down, leaving the override set for whatever session starts next. Gating
+# the show direction too meant niri inherited a disabled dock and had no way to
+# clear it, while Hyprland silently repaired itself on its next login. So the
+# show direction runs under both compositors, as the idempotent repair it is;
+# restoring at logout instead would not help, since the case that strands the
+# override is the session dying before any restore can run.
 chrome() {
-    [ "$compositor" = hyprland ] || return 0
+    case "$1" in
+        exit | hide-start) [ "$compositor" = hyprland ] || return 0 ;;
+    esac
     "$session_chrome" "$@"
 }
 
