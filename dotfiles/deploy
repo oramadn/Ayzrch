@@ -92,6 +92,28 @@ while IFS= read -r source; do
     seeded=$((seeded + 1))
 done < <(find "$repo_dir/seed" -type f | sort)
 
+# Claude Code rewrites settings.json itself (model, plugins, theme), so it can
+# be neither linked nor seeded. Only the statusLine key is ours: merge it in,
+# leaving everything else alone. python3 rather than jq, which the laptop lacks.
+python3 - "$home_dir/.claude/settings.json" <<'EOF'
+import json, os, sys
+
+path = sys.argv[1]
+wanted = {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}
+try:
+    with open(path) as handle:
+        settings = json.load(handle)
+except FileNotFoundError:
+    settings = {}
+if settings.get("statusLine") != wanted:
+    settings["statusLine"] = wanted
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w") as handle:
+        json.dump(settings, handle, indent=2)
+        handle.write("\n")
+    os.replace(path + ".tmp", path)
+EOF
+
 printf 'Dotfiles deployed: %d linked, %d seeded.\n' "$linked" "$seeded"
 if ((${#moved_aside[@]})); then
     printf 'Existing content was moved aside, not deleted:\n'

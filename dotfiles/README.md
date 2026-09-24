@@ -19,6 +19,10 @@ Deployed by [`deploy`](deploy), which `scripts/05-dotfiles.sh` calls.
 size), and `herdr/config.toml`, where it owns the generated `[theme.custom]`
 table but the prefix key is yours.
 
+`~/.claude/settings.json` is neither: Claude Code rewrites it, so `deploy`
+merges in only the `statusLine` key that points at the linked
+`.claude/statusline-command.sh`.
+
 `.config/nvim` is linked as a **directory**, not file by file, so lazy.nvim's
 rewrite of `lazy-lock.json` lands here and gets tracked. A file-level symlink
 would be replaced by any program that saves via temp-and-rename.
