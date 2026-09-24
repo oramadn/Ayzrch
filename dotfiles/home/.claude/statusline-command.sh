@@ -90,15 +90,33 @@ palette_accent="${fields[8]:-}"
 palette_muted="${fields[9]:-}"
 palette_accent_secondary="${fields[10]:-}"
 
-# Shorten home directory to ~
 home="$HOME"
-short_cwd="${cwd/#$home/\~}"
+display_dir="$cwd"
+worktree_label=""
 
 # Git branch (skip optional locks)
 branch=""
 if [ -n "$cwd" ]; then
   branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
+
+  # A linked worktree's path is the whole checkout location (often nested under
+  # the main repo), which the branch then repeats. Show the main repo's path and
+  # the worktree's name instead. git-dir differs from git-common-dir only in a
+  # linked worktree -- a submodule has the two equal.
+  { read -r top; read -r git_dir; read -r common_dir; } < <(
+    git -C "$cwd" --no-optional-locks rev-parse --path-format=absolute \
+      --show-toplevel --git-dir --git-common-dir 2>/dev/null)
+  if [ -n "$common_dir" ] && [ "$git_dir" != "$common_dir" ]; then
+    display_dir=$(dirname "$common_dir")
+    worktree_label="${worktree_name:-$(basename "$top")}${cwd#"$top"}"
+    # Claude Code's own worktrees name the branch worktree-<name>.
+    case "$branch" in
+      "$worktree_name"|"worktree-$worktree_name"|"$(basename "$top")"|"worktree-$(basename "$top")") branch="" ;;
+    esac
+  fi
 fi
+
+short_cwd="${display_dir/#$home/\~}"
 
 # Decorative colours: Orbit's palette when it is readable, otherwise the values
 # the palette was generated from, so the line still renders on a bare machine.
@@ -119,7 +137,11 @@ RESET='\033[0m'
 parts=()
 
 # Directory
-[ -n "$short_cwd" ] && parts+=("$(printf '%b%s%b' "$BLUE" "$short_cwd" "$RESET")")
+if [ -n "$worktree_label" ]; then
+  parts+=("$(printf '%b%s%b %b⎇ %s%b' "$BLUE" "$short_cwd" "$RESET" "$PURPLE" "$worktree_label" "$RESET")")
+elif [ -n "$short_cwd" ]; then
+  parts+=("$(printf '%b%s%b' "$BLUE" "$short_cwd" "$RESET")")
+fi
 
 # Git branch
 [ -n "$branch" ] && parts+=("$(printf '%b %s%b' "$GRAY" "$branch" "$RESET")")
