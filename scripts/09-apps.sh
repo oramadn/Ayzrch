@@ -69,6 +69,9 @@ echo ":: Node $(node -v) / npm $(npm -v) ready."
 echo ":: Installing screenshot and clipping tools..."
 sudo pacman -S --noconfirm grim slurp satty wl-clipboard
 
+echo ":: Installing image and PDF viewers..."
+sudo pacman -S --needed --noconfirm loupe papers
+
 # ------------------------------------------------------------------------------
 # 6. Wayland desktop entry overrides for Electron apps
 #    These apps default to X11; force Wayland so they work without XWayland.
@@ -87,7 +90,7 @@ Type=Application
 Icon=todoist
 StartupWMClass=Todoist
 Comment=The Best To-Do List App and Task Manager
-MimeType=x-scheme-handler/todoist;x-scheme-handler/com.todoist;image/png;image/jpeg;image/webp;application/pdf;
+MimeType=x-scheme-handler/todoist;x-scheme-handler/com.todoist;application/pdf;
 Categories=Office;
 
 [Desktop Action new-window]
@@ -116,3 +119,16 @@ EOF
 
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
+# ------------------------------------------------------------------------------
+# 7. Default viewers for images and PDFs
+#    Without a default, xdg-open picks any app that claims the type, and a
+#    ~/.local entry outranks /usr -- so Todoist, which claims images and PDFs
+#    to attach them to tasks, was opening every PNG. xdg-mime merges these into
+#    ~/.config/mimeapps.list, which Zen and others rewrite, so it is set here
+#    rather than linked from dotfiles/.
+# ------------------------------------------------------------------------------
+echo ":: Setting Loupe and Papers as default viewers..."
+xdg-mime default org.gnome.Loupe.desktop \
+    image/png image/jpeg image/webp image/gif image/bmp image/tiff \
+    image/svg+xml image/avif image/heic image/jxl
+xdg-mime default org.gnome.Papers.desktop application/pdf
