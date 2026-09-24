@@ -90,7 +90,7 @@ Type=Application
 Icon=todoist
 StartupWMClass=Todoist
 Comment=The Best To-Do List App and Task Manager
-MimeType=x-scheme-handler/todoist;x-scheme-handler/com.todoist;application/pdf;
+MimeType=x-scheme-handler/todoist;x-scheme-handler/com.todoist;
 Categories=Office;
 
 [Desktop Action new-window]
