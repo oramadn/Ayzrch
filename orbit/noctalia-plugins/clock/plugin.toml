@@ -4,7 +4,7 @@ version     = "1.0.0"
 plugin_api  = 14
 author      = "orbit"
 icon        = "clock"
-description = "Time and date with an ordinal day, such as 08:36 19th of Sept."
+description = "Time and date with an ordinal day, such as 08:36 19th of Sep."
 
 [[widget]]
 id    = "clock"
