@@ -1,0 +1,10 @@
+# The built-in clock can't print an ordinal day, so the orbit/clock plugin
+# takes its place. Deploy links it into ~/.local/share/noctalia/plugins/clock.
+[plugins]
+enabled = ["orbit/clock"]
+
+[widget.datetime]
+type = "orbit/clock:clock"
+
+[bar.default]
+center = ["datetime"]

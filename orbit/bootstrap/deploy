@@ -95,9 +95,13 @@ mkdir -p "$home_dir/.config/niri"
     printf '// Written by nwg-displays. Run it to arrange this machine'"'"'s monitors.\n' \
         >"$home_dir/.config/niri/monitor.kdl"
 
-for relative in noctalia/90-orbit-glass.toml noctalia/hooks.toml \
+for relative in noctalia/40-orbit-bar.toml noctalia/90-orbit-glass.toml noctalia/hooks.toml \
     noctalia/templates/wallpaper-palette.lua; do
     link_config "$relative"
+done
+for source in "$repo_dir"/noctalia-plugins/*; do
+    [[ -d "$source" ]] || continue
+    link_owned "$source" "$home_dir/.local/share/noctalia/plugins/$(basename "$source")"
 done
 for relative in "$repo_dir"/config/quickshell/global-menu/*; do
     [[ -f "$relative" ]] || continue
