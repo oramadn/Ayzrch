@@ -83,4 +83,4 @@ export PATH="$PATH:$FLUTTER_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$AND
 # Flutter web: Chromium stands in for Chrome
 export CHROME_EXECUTABLE=/usr/bin/chromium
 
-source ~/.zsh/cm-net.zsh
+[[ -r ~/.zsh/cm-net.zsh ]] && source ~/.zsh/cm-net.zsh
