@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code status line — directory + git branch + model, in Orbit's palette.
+# Wraps onto two lines (where / metrics) when it would not fit the terminal.
 #
 # Decorative colours are read from the semantic palette orbit-theme regenerates
 # on every wallpaper change, so this line follows the desktop the way the prompt
@@ -92,6 +93,7 @@ palette_accent_secondary="${fields[10]:-}"
 
 home="$HOME"
 display_dir="$cwd"
+sub_dir=""
 worktree_label=""
 
 # Git branch (skip optional locks)
@@ -99,24 +101,53 @@ branch=""
 if [ -n "$cwd" ]; then
   branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
 
-  # A linked worktree's path is the whole checkout location (often nested under
-  # the main repo), which the branch then repeats. Show the main repo's path and
-  # the worktree's name instead. git-dir differs from git-common-dir only in a
-  # linked worktree -- a submodule has the two equal.
   { read -r top; read -r git_dir; read -r common_dir; } < <(
     git -C "$cwd" --no-optional-locks rev-parse --path-format=absolute \
       --show-toplevel --git-dir --git-common-dir 2>/dev/null)
+  if [ -n "$top" ]; then
+    display_dir="$top"
+    sub_dir="${cwd#"$top"}"
+  fi
+
+  # A linked worktree's path is the whole checkout location (often a sibling of
+  # the main repo), which the branch then repeats. Show the main repo's path and
+  # the worktree instead. git-dir differs from git-common-dir only in a linked
+  # worktree -- a submodule has the two equal.
   if [ -n "$common_dir" ] && [ "$git_dir" != "$common_dir" ]; then
     display_dir=$(dirname "$common_dir")
-    worktree_label="${worktree_name:-$(basename "$top")}${cwd#"$top"}"
-    # Claude Code's own worktrees name the branch worktree-<name>.
-    case "$branch" in
-      "$worktree_name"|"worktree-$worktree_name"|"$(basename "$top")"|"worktree-$(basename "$top")") branch="" ;;
-    esac
+    wt="${worktree_name:-$(basename "$top")}"
+    worktree_label="$wt"
+    # Worktrees are named after their branch: feat/x checks out as feat-x, and
+    # Claude Code's own name the branch worktree-<name>. Either way the branch
+    # says the same thing twice, so show it once -- as the branch, the real name.
+    if [ -n "$branch" ] && [ "${branch//\//-}" = "$wt" ]; then
+      worktree_label="$branch"
+      branch=""
+    elif [ "$branch" = "worktree-$wt" ]; then
+      branch=""
+    fi
   fi
 fi
 
-short_cwd="${display_dir/#$home/\~}"
+# Fish-style: every component but the last two cut to its first letter (a
+# leading dot kept), so ~/Workspace/connectedmotion/vehicle-inspection/backend
+# reads ~/W/c/vehicle-inspection/backend. The path inside the repo stays whole.
+abbrev_path() {
+  local IFS=/ segs out="" i n s
+  read -ra segs <<< "$1"
+  n=${#segs[@]}
+  for ((i = 0; i < n; i++)); do
+    s="${segs[i]}"
+    if ((i < n - 2)) && [ -n "$s" ] && [ "$s" != "~" ]; then
+      if [[ $s == .* ]]; then s="${s:0:2}"; else s="${s:0:1}"; fi
+    fi
+    out+="$s"
+    ((i < n - 1)) && out+="/"
+  done
+  printf '%s' "${out:-$1}"
+}
+
+short_cwd="$(abbrev_path "${display_dir/#$home/\~}")${sub_dir}"
 
 # Decorative colours: Orbit's palette when it is readable, otherwise the values
 # the palette was generated from, so the line still renders on a bare machine.
@@ -136,7 +167,8 @@ RESET='\033[0m'
 
 parts=()
 
-# Directory
+# Where: directory, worktree and branch. Kept apart from the metrics so a
+# narrow terminal can put each on its own line.
 if [ -n "$worktree_label" ]; then
   parts+=("$(printf '%b%s%b %b⎇ %s%b' "$BLUE" "$short_cwd" "$RESET" "$PURPLE" "$worktree_label" "$RESET")")
 elif [ -n "$short_cwd" ]; then
@@ -145,6 +177,7 @@ fi
 
 # Git branch
 [ -n "$branch" ] && parts+=("$(printf '%b %s%b' "$GRAY" "$branch" "$RESET")")
+where_count=${#parts[@]}
 
 # 5-hour rate limit usage, colored by threshold
 if [ -n "$five_hour_pct" ]; then
@@ -213,13 +246,28 @@ if [ -n "$total_cost" ]; then
 fi
 
 # Join with an explicit " | " separator
-joined=""
-for p in "${parts[@]}"; do
-  if [ -z "$joined" ]; then
-    joined="$p"
-  else
-    joined="${joined} | ${p}"
-  fi
-done
+join_parts() {
+  local joined="" p
+  for p in "$@"; do
+    if [ -z "$joined" ]; then
+      joined="$p"
+    else
+      joined="${joined} | ${p}"
+    fi
+  done
+  printf '%s' "$joined"
+}
 
-printf '%s' "$joined"
+joined=$(join_parts "${parts[@]}")
+
+# Claude Code passes the terminal width in COLUMNS and cuts the line off with an
+# ellipsis a couple of columns short of it. When the line will not fit, the
+# metrics move to a second line rather than losing the context gauge.
+plain=$(printf '%s' "$joined" | sed 's/\x1b\[[0-9;]*m//g')
+if [ -n "$COLUMNS" ] && [ "${#plain}" -gt $((COLUMNS - 4)) ] \
+   && [ "$where_count" -gt 0 ] && [ "$where_count" -lt "${#parts[@]}" ]; then
+  printf '%s\n%s' "$(join_parts "${parts[@]:0:where_count}")" \
+    "$(join_parts "${parts[@]:where_count}")"
+else
+  printf '%s' "$joined"
+fi
